@@ -17,6 +17,10 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    // Ensure jsx-runtime and react are pre-bundled by Vite during build
+    include: ["react", "react-dom", "react/jsx-runtime"]
+  },
   build: {
     outDir: "dist",
   },
