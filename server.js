@@ -1,5 +1,5 @@
 // server.js
-// Express backend for AI Resume Analyzer (ES module style)
+// Express backend for AI Resume Analyzer (ES module style).
 // Features:
 // - dotenv config
 // - multer uploads with size limit
@@ -7,7 +7,8 @@
 // - robust OpenAI call with JSON extraction fallback
 // - OPENAI_MOCK support for safe local/testing mode
 // - serves Vite `dist/` if present (for production single-repo deploys)
-// - careful uploaded file cleanup and helpful error messages (temporary debug mode)
+// - rate limiting via express-rate-limit
+// - careful uploaded file cleanup and helpful error messages
 
 import express from "express";
 import multer from "multer";
