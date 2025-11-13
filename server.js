@@ -1,5 +1,13 @@
 // server.js
 // Express backend for AI Resume Analyzer (ES module style)
+// Features:
+// - dotenv config
+// - multer uploads with size limit
+// - PDF/DOCX/TXT parsing (pdf-parse, mammoth)
+// - robust OpenAI call with JSON extraction fallback
+// - OPENAI_MOCK support for safe local/testing mode
+// - serves Vite `dist/` if present (for production single-repo deploys)
+// - careful uploaded file cleanup and helpful error messages (temporary debug mode)
 
 import express from "express";
 import multer from "multer";
@@ -10,6 +18,7 @@ import fs from "fs";
 import path from "path";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
+import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
 
 dotenv.config();
@@ -19,67 +28,51 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Middleware
+// Basic middleware
 app.use(cors());
-app.use(express.json({ limit: "1mb" })); // small JSON bodies
+app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Multer config: temp uploads folder, 5 MB limit
+// Rate limiting (basic protection)
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60, // limit each IP to 60 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// Multer config (uploads folder will be created automatically if necessary)
+const UPLOADS_DIR = path.join(__dirname, "uploads");
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
 const upload = multer({
-  dest: path.join(__dirname, "uploads/"),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  dest: UPLOADS_DIR,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB limit
 });
 
-// Utility: safely read & remove uploaded file
-async function readAndRemoveFile(filePath, encoding = null) {
+// Utility helpers
+function safeUnlink(filePath) {
   try {
-    const content = encoding ? fs.readFileSync(filePath, encoding) : fs.readFileSync(filePath);
-    fs.unlinkSync(filePath);
-    return content;
-  } catch (err) {
-    // Attempt to unlink if exists
-    try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
-    throw err;
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (e) {
+    console.warn("Failed to unlink file:", filePath, e?.message || e);
   }
 }
+async function readFileUtf8(filePath) {
+  return fs.readFileSync(filePath, "utf8");
+}
 
-// API: parse uploaded file and return extracted text
-app.post("/api/parse", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const { path: fp, originalname, mimetype } = req.file;
-    let text = "";
-
-    if (mimetype === "application/pdf" || originalname.toLowerCase().endsWith(".pdf")) {
-      const buffer = fs.readFileSync(fp);
-      const data = await pdf(buffer);
-      text = data.text || "";
-      fs.unlinkSync(fp);
-    } else if (originalname.toLowerCase().endsWith(".docx")) {
-      const result = await mammoth.extractRawText({ path: fp });
-      text = result.value || "";
-      fs.unlinkSync(fp);
-    } else {
-      // treat as text file
-      text = await readAndRemoveFile(fp, "utf8");
-    }
-
-    return res.json({ text });
-  } catch (err) {
-    console.error("Parse error:", err);
-    return res.status(500).json({ error: "Failed to parse file" });
-  }
-});
-
-// Helper: try to extract JSON from text robustly
+// Try to robustly extract JSON from a text response
 function extractJsonFromText(text) {
-  // Try direct parse
+  if (!text || typeof text !== "string") return null;
+
+  // Direct JSON parse
   try {
     return JSON.parse(text);
   } catch {}
 
-  // Attempt to locate the first { ... } block
+  // Attempt to find first { ... } block
   const firstCurly = text.indexOf("{");
   const lastCurly = text.lastIndexOf("}");
   if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
@@ -89,7 +82,7 @@ function extractJsonFromText(text) {
     } catch {}
   }
 
-  // Try to find a JSON array if the assistant returned an array
+  // Attempt to find first [ ... ] block
   const firstBracket = text.indexOf("[");
   const lastBracket = text.lastIndexOf("]");
   if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
@@ -99,67 +92,104 @@ function extractJsonFromText(text) {
     } catch {}
   }
 
-  // Couldn't parse JSON
   return null;
 }
 
-// API: analyze resume (file upload OR text body)
+// Parse endpoint
+app.post("/api/parse", upload.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "No file uploaded." });
+
+  const filePath = file.path;
+  const originalName = file.originalname || "";
+  const mimetype = file.mimetype || "";
+
+  try {
+    let text = "";
+    if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
+      const buffer = fs.readFileSync(filePath);
+      const data = await pdf(buffer);
+      text = data?.text || "";
+    } else if (originalName.toLowerCase().endsWith(".docx")) {
+      const result = await mammoth.extractRawText({ path: filePath });
+      text = result?.value || "";
+    } else {
+      text = await readFileUtf8(filePath);
+    }
+
+    safeUnlink(filePath);
+    return res.json({ text });
+  } catch (err) {
+    safeUnlink(filePath);
+    console.error("Parse error:", err);
+    return res.status(500).json({ error: "Failed to parse file", message: err?.message || String(err) });
+  }
+});
+
+// Analyze endpoint
 app.post("/api/analyze", upload.single("file"), async (req, res) => {
   let filePath;
   try {
     let text = "";
 
+    // 1) Obtain text from upload or raw body
     if (req.file) {
       filePath = req.file.path;
-      const { originalname, mimetype } = req.file;
+      const originalName = req.file.originalname || "";
+      const mimetype = req.file.mimetype || "";
 
-      if (mimetype === "application/pdf" || originalname.toLowerCase().endsWith(".pdf")) {
+      if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
         const buffer = fs.readFileSync(filePath);
         text = (await pdf(buffer)).text || "";
-        fs.unlinkSync(filePath);
-      } else if (originalname.toLowerCase().endsWith(".docx")) {
+      } else if (originalName.toLowerCase().endsWith(".docx")) {
         text = (await mammoth.extractRawText({ path: filePath })).value || "";
-        fs.unlinkSync(filePath);
       } else {
-        text = await readAndRemoveFile(filePath, "utf8");
+        text = await readFileUtf8(filePath);
       }
+      safeUnlink(filePath);
     } else if (req.body.text) {
-      text = req.body.text;
+      text = String(req.body.text);
     } else {
       return res.status(400).json({ error: "No file or text provided" });
     }
 
-    // Build the prompt for the AI
-    const prompt = `You are an expert resume reviewer. Given the resume text delimited by triple backticks, return a JSON object with keys: 
-- atsScore (integer 0-100), 
-- topSkills (array of strings), 
-- suggestions (array of strings), 
-- rewrittenBullets (array of strings, up to 6). 
-Respond ONLY with valid JSON. Resume:
+    // 2) Basic sanity checks
+    if (!text || text.trim().length < 10) {
+      return res.status(400).json({ error: "Parsed text is empty or too short", parsedLength: text?.length || 0 });
+    }
 
-\`\`\`
-${text.slice(0, 6000)}
-\`\`\``;
-
-    // If no API key, return mock data (useful for local dev / testing)
-    if (!process.env.OPENAI_API_KEY) {
+    // 3) Mock fallback (useful for testing / if key not set)
+    const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
+    if (USE_MOCK) {
       const mock = {
-        atsScore: 85,
+        atsScore: 82,
         topSkills: ["JavaScript", "React", "Node.js"],
         suggestions: [
-          "Add quantifiable achievements to your experience.",
-          "Ensure skills are in a dedicated section near the top.",
-          "Use bullet points with strong action verbs."
+          "Add measurable metrics to achievements.",
+          "Move skills to a prominent top section.",
+          "Use action verbs in bullet points."
         ],
         rewrittenBullets: [
-          "Optimized page load time by 45% through code-splitting and lazy loading.",
-          "Led a 4-person team to deliver major feature two sprints early."
+          "Optimized page load time by 40% by introducing code-splitting and lazy-loading.",
+          "Led a 3-person team to deliver a major feature two sprints early."
         ]
       };
       return res.json(mock);
     }
 
-    // Call OpenAI Chat Completions (adjust model / endpoint as needed)
+    // 4) Build an instruction prompt (keep concise & strict to JSON output)
+    const prompt = `You are an expert resume reviewer. Given the resume text between triple backticks, return ONLY valid JSON with keys:
+- atsScore (integer 0-100),
+- topSkills (array of strings),
+- suggestions (array of strings),
+- rewrittenBullets (array of strings, up to 6).
+
+Resume:
+\`\`\`
+${text.slice(0, 6000)}
+\`\`\``;
+
+    // 5) Call OpenAI Chat Completions (Chat API)
     const apiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -167,60 +197,66 @@ ${text.slice(0, 6000)}
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini", // change model if desired
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         messages: [
-          { role: "system", content: "You are a helpful resume analysis assistant." },
-          { role: "user", content: prompt },
+          { role: "system", content: "You are a helpful resume reviewer that outputs only strict JSON." },
+          { role: "user", content: prompt }
         ],
         temperature: 0.2,
         max_tokens: 900,
       }),
     });
 
+    const rawText = await apiRes.text();
+
     if (!apiRes.ok) {
-      const errTxt = await apiRes.text();
-      console.error("OpenAI error:", errTxt);
-      return res.status(502).json({ error: "AI provider returned an error" });
+      console.error("OpenAI non-OK:", apiRes.status, rawText);
+      return res.status(502).json({ error: "AI provider returned an error", status: apiRes.status, details: rawText });
     }
 
-    const aiJson = await apiRes.json();
-    const assistantMessage = aiJson.choices?.[0]?.message?.content || aiJson.choices?.[0]?.text || "";
-
-    // Try to parse JSON strictly; otherwise try to extract JSON chunk; otherwise return raw text.
-    const parsed = extractJsonFromText(assistantMessage);
-    if (parsed) {
-      return res.json(parsed);
-    } else {
-      // If the assistant didn't return JSON, return raw text so frontend can still show it
-      return res.json({ raw: assistantMessage });
+    // 6) Try to parse JSON strictly or via extraction
+    let parsed = null;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      parsed = extractJsonFromText(rawText);
     }
+
+    if (!parsed) {
+      console.warn("AI returned non-JSON. Returning raw text for debugging.");
+      // Return rawText so frontend can display it; frontend should show to developer
+      return res.status(200).json({ raw: rawText });
+    }
+
+    return res.json(parsed);
   } catch (err) {
     console.error("Analyze error:", err);
-    // Clean up any leftover uploaded file
-    try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
-    return res.status(500).json({ error: "Analysis failed" });
+    safeUnlink(filePath);
+    return res.status(500).json({ error: "Analysis failed", message: err?.message || String(err) });
   }
 });
 
-// Serve frontend build (Vite's `dist` folder)
+// Serve frontend build (dist) if present
 const DIST_DIR = path.join(__dirname, "dist");
-
-// Serve static files if they exist
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
-
-  // Fallback: return index.html for client-side routing (except API routes)
+  // All non-API GETs serve the SPA
   app.get("*", (req, res, next) => {
-    // let API calls pass through
-    if (req.path.startsWith("/api/")) return next();
+    if (req.path.startsWith("/api")) return next();
     res.sendFile(path.join(DIST_DIR, "index.html"));
   });
 } else {
-  console.warn("Warning: dist folder not found. Frontend won't be served by Express. Run `npm run build` to generate it.");
+  console.warn("dist folder not found — static frontend will not be served by Express. Run `npm run build` to generate it.");
 }
+
+// Health check
+app.get("/healthz", (_, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
 // Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT} (PORT=${PORT})`);
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("OPENAI_API_KEY is not set. The server will run in mock mode. Set OPENAI_API_KEY in env to enable real AI calls.");
+  }
 });
