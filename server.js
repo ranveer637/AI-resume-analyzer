@@ -1,4 +1,17 @@
 // server.js
+// Robust Express backend for AI Resume Analyzer
+// - dotenv config
+// - multer uploads with size limit
+// - PDF/DOCX/TXT parsing (pdf-parse, mammoth)
+// - keyword extraction (local, no extra deps)
+// - OpenAI call with retries & exponential backoff + graceful fallback
+// - OPENAI_MOCK support for safe testing
+// - rate limiting via express-rate-limit
+// - serves Vite `dist/` if present
+//
+// IMPORTANT: add OPENAI_API_KEY in your Render / environment variables.
+// If OPENAI_MOCK=true is set, the server returns mock analysis.
+
 import express from "express";
 import multer from "multer";
 import pdf from "pdf-parse";
@@ -21,27 +34,27 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting
+// Rate limiting (basic protection)
 const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
+  windowMs: 60 * 1000, // 1 minute
+  max: 60, // limit each IP to 60 requests per minute
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use(limiter);
 
-// Uploads
+// Uploads directory
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOADS_DIR,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB limit
 });
 
-// ------------------------
-// Keyword extraction utils
-// ------------------------
+// ---------------------------
+// Keyword extraction helpers
+// ---------------------------
 const COMMON_STOPWORDS = new Set([
   "a","an","the","and","or","of","to","in","on","for","with","by","as","is","are","was","were",
   "be","been","has","have","had","that","this","these","those","at","from","it","its","but","not",
@@ -50,12 +63,12 @@ const COMMON_STOPWORDS = new Set([
 ]);
 
 const SKILLS_LIST = [
-  "javascript","typescript","react","react.js","vue","angular","node.js","node","express",
+  "javascript","typescript","react","react.js","react-native","vue","angular","node.js","node","express",
   "html","css","tailwind","bootstrap","redux","graphql","rest","api","mongodb","mysql","postgresql",
-  "docker","kubernetes","aws","azure","gcp","git","github","jest","mocha","cypress","selenium",
-  "python","java","c++","c#","php","ruby","tensorflow","pytorch","machine learning","nlp",
-  "data analysis","sql","linux","bash","figma","photoshop","ui/ux","leadership","communication",
-  "agile","scrum","devops","testing","ci/cd","performance","optimization","security"
+  "docker","kubernetes","aws","azure","gcp","git","github","gitlab","jest","mocha","cypress","selenium",
+  "python","pandas","numpy","scikit-learn","tensorflow","pytorch","java","c++","c#","php","ruby",
+  "machine learning","nlp","data analysis","sql","linux","bash","figma","photoshop","ui/ux","leadership",
+  "communication","agile","scrum","devops","testing","ci/cd","performance","optimization","security"
 ].map(s => s.toLowerCase());
 
 function tokenizeForKeywords(text) {
@@ -108,19 +121,19 @@ function extractKeywords(text, opts = {}) {
   const combined = [...skillList, ...topTokens].filter((v, i, a) => a.indexOf(v) === i);
 
   return {
-    keywords: combined.slice(0, 20),
+    keywords: combined.slice(0, 30),
     skillsFound: skillList,
-    topTokens: topTokens.slice(0, 20)
+    topTokens: topTokens.slice(0, 30)
   };
 }
 
-// ------------------------
-// Helper file functions
-// ------------------------
+// ---------------------------
+// File helpers & JSON extractor
+// ---------------------------
 function safeUnlink(filePath) {
   try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
 }
-async function readFileUtf8(filePath) {
+function readFileUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 function extractJsonFromText(text) {
@@ -139,9 +152,48 @@ function extractJsonFromText(text) {
   return null;
 }
 
-// ------------------------
-// /api/parse - returns text + keywords
-// ------------------------
+// ---------------------------
+// OpenAI call with retries/backoff
+// ---------------------------
+async function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
+  let lastErrText = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const txt = await resp.text();
+
+      if (resp.ok) return { ok: true, text: txt, status: resp.status };
+      lastErrText = `status=${resp.status} body=${txt}`;
+
+      // If non-retryable, return immediately
+      if (![429].includes(resp.status) && !(resp.status >=500 && resp.status <600)) {
+        return { ok: false, text: txt, status: resp.status };
+      }
+      // else retry
+    } catch (err) {
+      lastErrText = String(err?.message || err);
+    }
+
+    const delay = Math.floor(baseDelay * Math.pow(2, i) + Math.random() * 300);
+    console.warn(`OpenAI request failed (attempt ${i+1}/${attempts}). Retrying in ${delay}ms. Last error: ${lastErrText}`);
+    await sleep(delay);
+  }
+  return { ok: false, text: lastErrText || "exhausted retries", status: 429 };
+}
+
+// ---------------------------
+// /api/parse - extract text + keywords
+// ---------------------------
 app.post("/api/parse", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded." });
@@ -160,7 +212,7 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
       const result = await mammoth.extractRawText({ path: filePath });
       text = result?.value || "";
     } else {
-      text = await readFileUtf8(filePath);
+      text = readFileUtf8(filePath);
     }
 
     safeUnlink(filePath);
@@ -178,9 +230,9 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
   }
 });
 
-// ------------------------
-// /api/analyze - call OpenAI and include keywords
-// ------------------------
+// ---------------------------
+// /api/analyze - OpenAI + keywords (with retries + fallback)
+// ---------------------------
 app.post("/api/analyze", upload.single("file"), async (req, res) => {
   let filePath;
   try {
@@ -196,7 +248,7 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       } else if (originalName.toLowerCase().endsWith(".docx")) {
         text = (await mammoth.extractRawText({ path: filePath })).value || "";
       } else {
-        text = await readFileUtf8(filePath);
+        text = readFileUtf8(filePath);
       }
       safeUnlink(filePath);
     } else if (req.body.text) {
@@ -209,10 +261,10 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "Parsed text is empty or too short", parsedLength: text?.length || 0 });
     }
 
-    // keywords locally (fast)
+    // Local keywords
     const kw = extractKeywords(text);
 
-    // mock fallback
+    // Mock fallback (if set or key missing)
     const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
     if (USE_MOCK) {
       const mock = {
@@ -234,51 +286,60 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       return res.json(mock);
     }
 
+    // Prepare prompt
     const prompt = `You are an expert resume reviewer. Given the resume text between triple backticks, return ONLY valid JSON with keys:
 - atsScore (integer 0-100),
 - topSkills (array of strings),
 - suggestions (array of strings),
-- rewrittenBullets (array of strings, up to 6).
-
-Also include a "keywords" array that lists the main keywords or skills found.
+- rewrittenBullets (array of strings, up to 6),
+- keywords (array of strings listing main keywords/skills found).
 
 Resume:
 \`\`\`
 ${text.slice(0, 6000)}
 \`\`\``;
 
-    const apiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You are a helpful resume reviewer that outputs strict JSON." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.2,
-        max_tokens: 900,
-      }),
-    });
+    const payload = {
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a helpful resume reviewer that outputs strict JSON." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 700
+    };
 
-    const rawText = await apiRes.text();
-    if (!apiRes.ok) {
-      console.error("OpenAI error:", apiRes.status, rawText);
-      return res.status(502).json({ error: "AI provider returned an error", status: apiRes.status, details: rawText });
+    // Call OpenAI with retries/backoff
+    const openaiResult = await callOpenAIWithRetries(payload, 5, 800);
+
+    if (!openaiResult.ok) {
+      console.error("OpenAI call failed after retries:", openaiResult);
+      // If non-retryable error (401, etc.), return it
+      if (openaiResult.status && openaiResult.status !== 429) {
+        return res.status(502).json({ error: "AI provider returned an error", status: openaiResult.status, details: openaiResult.text });
+      }
+
+      // Rate-limited or retries exhausted: return graceful fallback (keywords only)
+      return res.status(200).json({
+        error: "AI provider rate-limited or unavailable. Returning keyword-only analysis.",
+        details: openaiResult.text,
+        keywords: kw.keywords,
+        skillsFound: kw.skillsFound,
+        topTokens: kw.topTokens
+      });
     }
 
+    // Parse raw assistant reply
+    const rawText = openaiResult.text;
     let parsed = null;
     try { parsed = JSON.parse(rawText); } catch (e) { parsed = extractJsonFromText(rawText); }
 
     if (!parsed) {
-      // return raw text along with local keywords for debugging
+      // Return AI raw text + local keywords for debugging / partial result
       return res.status(200).json({ raw: rawText, keywords: kw.keywords, skillsFound: kw.skillsFound, topTokens: kw.topTokens });
     }
 
-    // ensure keywords exist in response (merge local keywords if AI didn't provide)
+    // Ensure keywords exist
     if (!parsed.keywords) parsed.keywords = kw.keywords;
     if (!parsed.skillsFound) parsed.skillsFound = kw.skillsFound;
     if (!parsed.topTokens) parsed.topTokens = kw.topTokens;
@@ -291,7 +352,7 @@ ${text.slice(0, 6000)}
   }
 });
 
-// Serve frontend build if present
+// Serve frontend build (dist) if present
 const DIST_DIR = path.join(__dirname, "dist");
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
@@ -303,12 +364,14 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn("dist folder not found — run `npm run build` to generate it.");
 }
 
+// Health check
 app.get("/healthz", (_, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
+// Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on PORT=${PORT}`);
   if (!process.env.OPENAI_API_KEY) {
-    console.warn("OPENAI_API_KEY not set — server runs in mock mode.");
+    console.warn("OPENAI_API_KEY not set — server will run in mock mode unless you set it.");
   }
 });
