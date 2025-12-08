@@ -64,6 +64,8 @@ export default function App() {
       });
 
       const raw = await res.text();
+      console.log("ANALYZE raw response:", raw);
+
       let data;
       try {
         data = JSON.parse(raw);
@@ -73,6 +75,7 @@ export default function App() {
 
       setAnalysis(data);
     } catch (err) {
+      console.error("Analyze failed:", err);
       setAnalysis({
         error: err.message || "Failed to analyze resume.",
       });
@@ -108,6 +111,8 @@ export default function App() {
       });
 
       const raw = await res.text();
+      console.log("PARSE raw response:", raw);
+
       let data;
       try {
         data = JSON.parse(raw);
@@ -115,17 +120,31 @@ export default function App() {
         data = { text: raw };
       }
 
-      setParsedText(data.text || "");
+      // Decide what to show in "Extracted Resume Text"
+      let displayText = "";
+      if (data.text && data.text.trim().length > 0) {
+        displayText = data.text;
+      } else if (data.message) {
+        displayText = `⚠️ ${data.message}`;
+      } else {
+        displayText =
+          "⚠️ No extractable text found. This can happen if the PDF is scanned or image-only. Try exporting your resume again as a text-based PDF or upload DOCX/TXT.";
+      }
+
+      setParsedText(displayText);
       setKeywords(data.keywords || []);
       setSkillsFound(data.skillsFound || []);
       setTopTokens(data.topTokens || []);
     } catch (err) {
-      setParsedText("❌ Failed to extract text.");
+      console.error("Parse failed:", err);
+      setParsedText(
+        "❌ Failed to extract text. Try another PDF/DOCX/TXT or re-export your resume."
+      );
     } finally {
       setLoading(false);
     }
 
-    // 2) Automatically run AI analysis
+    // 2) Automatically run AI analysis (even if parse was partial)
     await analyzeResume();
   };
 
@@ -317,6 +336,11 @@ export default function App() {
               {analysis?.error && (
                 <div className="text-xs bg-red-500/20 border border-red-500/40 p-3 rounded-lg text-red-200">
                   <strong>Error:</strong> {analysis.error}
+                  {analysis.details && (
+                    <div className="mt-1 text-[10px] opacity-80">
+                      {analysis.details}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -363,6 +387,25 @@ export default function App() {
                         ))}
                       </ul>
                     </div>
+                  )}
+
+                  {/* Fallback if AI responded but no arrays */}
+                  {!analysis.topSkills &&
+                    !analysis.suggestions &&
+                    !analysis.rewrittenBullets &&
+                    !analysis.raw && (
+                      <p className="text-xs text-slate-400">
+                        AI responded, but no structured fields were returned.
+                      </p>
+                    )}
+
+                  {analysis.raw && (
+                    <details className="mt-2 text-[10px] text-slate-400">
+                      <summary>Raw AI response</summary>
+                      <pre className="whitespace-pre-wrap mt-1">
+                        {analysis.raw}
+                      </pre>
+                    </details>
                   )}
                 </div>
               )}
