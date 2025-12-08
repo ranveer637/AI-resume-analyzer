@@ -136,27 +136,23 @@ export default function App() {
 
           {/* Right Section — Navigation */}
           <nav className="flex items-center gap-2 text-xs">
-            <Link
-              to="/"
-              className="hidden sm:inline-flex px-3 py-1.5 rounded-lg border border-white/10 text-slate-200 hover:bg-white/5 transition"
-            >
-              Analyzer
-            </Link>
+  <Link to="/" className="hidden sm:inline-flex px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5">
+    Analyzer
+  </Link>
 
-            <Link
-              to="/login"
-              className="inline-flex px-3 py-1.5 rounded-lg text-slate-100 hover:bg-white/5 border border-slate-500/60 transition"
-            >
-              Login
-            </Link>
+  <Link to="/recruiter-dashboard" className="px-3 py-1.5 rounded-lg border border-emerald-500/60 text-emerald-200 hover:bg-emerald-500/10">
+    Recruiter Dashboard
+  </Link>
 
-            <Link
-              to="/register"
-              className="inline-flex px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-semibold shadow-sm transition"
-            >
-              Register
-            </Link>
-          </nav>
+  <Link to="/login" className="px-3 py-1.5 rounded-lg border border-slate-600 hover:bg-white/5">
+    Login
+  </Link>
+
+  <Link to="/register" className="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white">
+    Register
+  </Link>
+</nav>
+
         </div>
       </header>
 
