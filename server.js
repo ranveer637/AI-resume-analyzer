@@ -1,16 +1,12 @@
 // server.js
 // Robust Express backend for AI Resume Analyzer
-// - dotenv config
-// - multer uploads with size limit
-// - PDF/DOCX/TXT parsing (pdf-parse, mammoth)
-// - keyword extraction (local, no extra deps)
-// - OpenAI call with retries & exponential backoff + graceful fallback
-// - OPENAI_MOCK support for safe testing
-// - rate limiting via express-rate-limit
-// - serves Vite `dist/` if present
-//
-// IMPORTANT: add OPENAI_API_KEY in your Render / environment variables.
-// If OPENAI_MOCK=true is set, the server returns mock analysis.
+// - File upload & parsing (PDF/DOCX/TXT)
+// - Keyword extraction (local, no extra deps)
+// - OpenAI call with retries & exponential backoff
+// - Guaranteed atsScore (0–100) using AI or heuristic fallback
+// - Mock mode via OPENAI_MOCK
+// - Rate limiting via express-rate-limit
+// - Serves Vite dist/ build in production
 
 import express from "express";
 import multer from "multer";
@@ -34,27 +30,25 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Rate limiting (basic protection)
+// -------- Rate limiting --------
 const limiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 60, // limit each IP to 60 requests per minute
+  max: 60, // per-IP per minute
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use(limiter);
 
-// Uploads directory
+// -------- Uploads directory --------
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOADS_DIR,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB limit
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
 });
 
-// ---------------------------
-// Keyword extraction helpers
-// ---------------------------
+// -------- Keyword extraction helpers --------
 const COMMON_STOPWORDS = new Set([
   "a","an","the","and","or","of","to","in","on","for","with","by","as","is","are","was","were",
   "be","been","has","have","had","that","this","these","those","at","from","it","its","but","not",
@@ -73,8 +67,8 @@ const SKILLS_LIST = [
 
 function tokenizeForKeywords(text) {
   return text
-    .replace(/[\u2012\u2013\u2014]/g, "-")
-    .replace(/[^\w\- ]+/g, " ")
+    .replace(/[\u2012\u2013\u2014]/g, "-") // normalize dashes
+    .replace(/[^\w\- ]+/g, " ")           // keep letters, numbers, underscore, dash, space
     .toLowerCase()
     .split(/\s+/)
     .filter(Boolean);
@@ -90,13 +84,13 @@ function extractKeywords(text, opts = {}) {
     freq.set(t, (freq.get(t) || 0) + 1);
   }
 
-  const freqEntries = Array.from(freq.entries()).sort((a,b) => b[1]-a[1]);
+  const freqEntries = Array.from(freq.entries()).sort((a, b) => b[1] - a[1]);
 
   const foundSkills = new Map();
   const words = tokens;
-  for (let i=0;i<words.length;i++){
-    for (let n=1;n<=3 && i+n<=words.length;n++){
-      const phrase = words.slice(i,i+n).join(" ");
+  for (let i = 0; i < words.length; i++) {
+    for (let n = 1; n <= 3 && i + n <= words.length; n++) {
+      const phrase = words.slice(i, i + n).join(" ");
       if (phrase.length < 2) continue;
       if (SKILLS_LIST.includes(phrase)) {
         foundSkills.set(phrase, (foundSkills.get(phrase) || 0) + 1);
@@ -106,7 +100,7 @@ function extractKeywords(text, opts = {}) {
 
   const topFrequent = [];
   const maxFreqTokens = opts.maxFreqTokens || 12;
-  for (const [token,count] of freqEntries) {
+  for (const [token, count] of freqEntries) {
     if (foundSkills.has(token)) continue;
     if (token.length <= 2) continue;
     topFrequent.push({ token, count });
@@ -114,7 +108,7 @@ function extractKeywords(text, opts = {}) {
   }
 
   const skillList = Array.from(foundSkills.entries())
-    .sort((a,b) => b[1] - a[1])
+    .sort((a, b) => b[1] - a[1])
     .map(x => x[0]);
 
   const topTokens = topFrequent.map(x => x.token);
@@ -123,42 +117,75 @@ function extractKeywords(text, opts = {}) {
   return {
     keywords: combined.slice(0, 30),
     skillsFound: skillList,
-    topTokens: topTokens.slice(0, 30)
+    topTokens: topTokens.slice(0, 30),
   };
 }
 
-// ---------------------------
-// File helpers & JSON extractor
-// ---------------------------
+// -------- ATS score heuristic fallback --------
+function estimateAtsScoreFromText(text, kw) {
+  const words = (text || "").split(/\s+/).filter(Boolean);
+  const length = words.length;
+  const keywordCount = (kw?.keywords || []).length;
+
+  let score = 40;
+
+  if (length > 150) score += 10;
+  if (length > 300) score += 10;
+  if (keywordCount > 5) score += 10;
+  if (keywordCount > 10) score += 10;
+  if (keywordCount > 15) score += 10;
+
+  // clamp between 30 and 95
+  if (score < 30) score = 30;
+  if (score > 95) score = 95;
+
+  return score;
+}
+
+// -------- Helpers --------
 function safeUnlink(filePath) {
-  try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch {
+    // ignore
+  }
 }
 function readFileUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 function extractJsonFromText(text) {
   if (!text || typeof text !== "string") return null;
-  try { return JSON.parse(text); } catch {}
+  try {
+    return JSON.parse(text);
+  } catch {}
+
   const firstCurly = text.indexOf("{");
   const lastCurly = text.lastIndexOf("}");
   if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
-    try { return JSON.parse(text.slice(firstCurly, lastCurly+1)); } catch {}
+    try {
+      return JSON.parse(text.slice(firstCurly, lastCurly + 1));
+    } catch {}
   }
+
   const firstBracket = text.indexOf("[");
   const lastBracket = text.lastIndexOf("]");
   if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-    try { return JSON.parse(text.slice(firstBracket, lastBracket+1)); } catch {}
+    try {
+      return JSON.parse(text.slice(firstBracket, lastBracket + 1));
+    } catch {}
   }
+
   return null;
 }
 
-// ---------------------------
-// OpenAI call with retries/backoff
-// ---------------------------
-async function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+// -------- OpenAI with retries --------
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
   let lastErrText = null;
+
   for (let i = 0; i < attempts; i++) {
     try {
       const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -172,28 +199,31 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
 
       const txt = await resp.text();
 
-      if (resp.ok) return { ok: true, text: txt, status: resp.status };
+      if (resp.ok) {
+        return { ok: true, text: txt, status: resp.status };
+      }
+
       lastErrText = `status=${resp.status} body=${txt}`;
 
-      // If non-retryable, return immediately
-      if (![429].includes(resp.status) && !(resp.status >=500 && resp.status <600)) {
+      // Retry only on 429 or 5xx
+      if (resp.status !== 429 && !(resp.status >= 500 && resp.status < 600)) {
         return { ok: false, text: txt, status: resp.status };
       }
-      // else retry
     } catch (err) {
       lastErrText = String(err?.message || err);
     }
 
     const delay = Math.floor(baseDelay * Math.pow(2, i) + Math.random() * 300);
-    console.warn(`OpenAI request failed (attempt ${i+1}/${attempts}). Retrying in ${delay}ms. Last error: ${lastErrText}`);
+    console.warn(
+      `OpenAI request failed (attempt ${i + 1}/${attempts}). Retrying in ${delay}ms. Last error: ${lastErrText}`
+    );
     await sleep(delay);
   }
+
   return { ok: false, text: lastErrText || "exhausted retries", status: 429 };
 }
 
-// ---------------------------
-// /api/parse - extract text + keywords
-// ---------------------------
+// -------- /api/parse: text + keywords --------
 app.post("/api/parse", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded." });
@@ -218,21 +248,33 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
     safeUnlink(filePath);
 
     if (!text || text.trim().length === 0) {
-      return res.status(200).json({ text: "", keywords: [], skillsFound: [], topTokens: [], message: "No extractable text (maybe scanned PDF?)" });
+      return res.status(200).json({
+        text: "",
+        keywords: [],
+        skillsFound: [],
+        topTokens: [],
+        message: "No extractable text (maybe scanned PDF?)",
+      });
     }
 
     const kw = extractKeywords(text);
-    return res.json({ text, keywords: kw.keywords, skillsFound: kw.skillsFound, topTokens: kw.topTokens });
+    return res.json({
+      text,
+      keywords: kw.keywords,
+      skillsFound: kw.skillsFound,
+      topTokens: kw.topTokens,
+    });
   } catch (err) {
     safeUnlink(filePath);
     console.error("Parse error:", err);
-    return res.status(500).json({ error: "Failed to parse file", message: err?.message || String(err) });
+    return res.status(500).json({
+      error: "Failed to parse file",
+      message: err?.message || String(err),
+    });
   }
 });
 
-// ---------------------------
-// /api/analyze - OpenAI + keywords (with retries + fallback)
-// ---------------------------
+// -------- /api/analyze: OpenAI + keywords + atsScore --------
 app.post("/api/analyze", upload.single("file"), async (req, res) => {
   let filePath;
   try {
@@ -242,6 +284,7 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       filePath = req.file.path;
       const originalName = req.file.originalname || "";
       const mimetype = req.file.mimetype || "";
+
       if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
         const buffer = fs.readFileSync(filePath);
         text = (await pdf(buffer)).text || "";
@@ -258,35 +301,38 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
     }
 
     if (!text || text.trim().length < 10) {
-      return res.status(400).json({ error: "Parsed text is empty or too short", parsedLength: text?.length || 0 });
+      return res.status(400).json({
+        error: "Parsed text is empty or too short",
+        parsedLength: text?.length || 0,
+      });
     }
 
-    // Local keywords
+    // Local keyword extraction
     const kw = extractKeywords(text);
 
-    // Mock fallback (if set or key missing)
+    // Mock mode: skip OpenAI entirely
     const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
     if (USE_MOCK) {
       const mock = {
-        atsScore: 82,
+        atsScore: estimateAtsScoreFromText(text, kw),
         topSkills: ["JavaScript", "React", "Node.js"],
         suggestions: [
           "Add measurable metrics to achievements.",
           "Move skills to a prominent top section.",
-          "Use action verbs in bullet points."
+          "Use action verbs in bullet points.",
         ],
         rewrittenBullets: [
           "Optimized page load time by 40% by introducing code-splitting and lazy-loading.",
-          "Led a 3-person team to deliver a major feature two sprints early."
+          "Led a 3-person team to deliver a major feature two sprints early.",
         ],
         keywords: kw.keywords,
         skillsFound: kw.skillsFound,
-        topTokens: kw.topTokens
+        topTokens: kw.topTokens,
       };
       return res.json(mock);
     }
 
-    // Prepare prompt
+    // Build prompt for AI
     const prompt = `You are an expert resume reviewer. Given the resume text between triple backticks, return ONLY valid JSON with keys:
 - atsScore (integer 0-100),
 - topSkills (array of strings),
@@ -303,56 +349,90 @@ ${text.slice(0, 6000)}
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [
         { role: "system", content: "You are a helpful resume reviewer that outputs strict JSON." },
-        { role: "user", content: prompt }
+        { role: "user", content: prompt },
       ],
       temperature: 0.2,
-      max_tokens: 700
+      max_tokens: 700,
     };
 
-    // Call OpenAI with retries/backoff
     const openaiResult = await callOpenAIWithRetries(payload, 5, 800);
 
     if (!openaiResult.ok) {
       console.error("OpenAI call failed after retries:", openaiResult);
-      // If non-retryable error (401, etc.), return it
+
+      // Non-retryable error (401, 403, etc.)
       if (openaiResult.status && openaiResult.status !== 429) {
-        return res.status(502).json({ error: "AI provider returned an error", status: openaiResult.status, details: openaiResult.text });
+        return res.status(502).json({
+          error: "AI provider returned an error",
+          status: openaiResult.status,
+          details: openaiResult.text,
+        });
       }
 
-      // Rate-limited or retries exhausted: return graceful fallback (keywords only)
+      // Rate limited or exhausted retries: return graceful fallback
       return res.status(200).json({
         error: "AI provider rate-limited or unavailable. Returning keyword-only analysis.",
         details: openaiResult.text,
+        atsScore: estimateAtsScoreFromText(text, kw),
         keywords: kw.keywords,
         skillsFound: kw.skillsFound,
-        topTokens: kw.topTokens
+        topTokens: kw.topTokens,
       });
     }
 
-    // Parse raw assistant reply
     const rawText = openaiResult.text;
     let parsed = null;
-    try { parsed = JSON.parse(rawText); } catch (e) { parsed = extractJsonFromText(rawText); }
-
-    if (!parsed) {
-      // Return AI raw text + local keywords for debugging / partial result
-      return res.status(200).json({ raw: rawText, keywords: kw.keywords, skillsFound: kw.skillsFound, topTokens: kw.topTokens });
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = extractJsonFromText(rawText);
     }
 
-    // Ensure keywords exist
+    if (!parsed) {
+      // Could not parse JSON, return raw AI text + local keywords + estimated ATS
+      return res.status(200).json({
+        raw: rawText,
+        atsScore: estimateAtsScoreFromText(text, kw),
+        keywords: kw.keywords,
+        skillsFound: kw.skillsFound,
+        topTokens: kw.topTokens,
+      });
+    }
+
+    // Ensure keyword fields exist
     if (!parsed.keywords) parsed.keywords = kw.keywords;
     if (!parsed.skillsFound) parsed.skillsFound = kw.skillsFound;
     if (!parsed.topTokens) parsed.topTokens = kw.topTokens;
+
+    // Ensure atsScore is always a valid number 0–100
+    if (
+      parsed.atsScore === undefined ||
+      parsed.atsScore === null ||
+      Number.isNaN(Number(parsed.atsScore))
+    ) {
+      parsed.atsScore = estimateAtsScoreFromText(text, kw);
+    } else {
+      let n = Number(parsed.atsScore);
+      if (!Number.isFinite(n)) {
+        n = estimateAtsScoreFromText(text, kw);
+      }
+      if (n < 0) n = 0;
+      if (n > 100) n = 100;
+      parsed.atsScore = Math.round(n);
+    }
 
     return res.json(parsed);
   } catch (err) {
     console.error("Analyze error:", err);
     safeUnlink(filePath);
-    return res.status(500).json({ error: "Analysis failed", message: err?.message || String(err) });
+    return res.status(500).json({
+      error: "Analysis failed",
+      message: err?.message || String(err),
+    });
   }
 });
 
-// Serve frontend build (dist) if present
+// -------- Serve frontend build (Vite dist) --------
 const DIST_DIR = path.join(__dirname, "dist");
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
@@ -364,10 +444,10 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn("dist folder not found — run `npm run build` to generate it.");
 }
 
-// Health check
+// -------- Health check --------
 app.get("/healthz", (_, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
-// Start server
+// -------- Start server --------
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on PORT=${PORT}`);
