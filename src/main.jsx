@@ -7,6 +7,7 @@ import "./index.css";
 import App from "./App";
 import Login from "./Login";
 import Register from "./Register";
+import RecruiterDashboard from "./RecruiterDashboard";
 
 function Root() {
   return (
@@ -14,14 +15,16 @@ function Root() {
       <Routes>
         {/* Main resume analyzer */}
         <Route path="/" element={<App />} />
-        {/* Optional alias route */}
         <Route path="/analyzer" element={<App />} />
 
-        {/* Auth pages */}
+        {/* Auth */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
 
-        {/* Fallback: any unknown route → home */}
+        {/* Hiring manager / admin dashboard */}
+        <Route path="/recruiter-dashboard" element={<RecruiterDashboard />} />
+
+        {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
