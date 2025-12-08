@@ -150,9 +150,11 @@ function safeUnlink(filePath) {
     // ignore
   }
 }
+
 function readFileUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
+
 function extractJsonFromText(text) {
   if (!text || typeof text !== "string") return null;
   try {
@@ -176,6 +178,18 @@ function extractJsonFromText(text) {
   }
 
   return null;
+}
+
+// -------- Safe PDF parsing (handles bad XRef entry) --------
+async function safeParsePdfBuffer(buffer) {
+  try {
+    const data = await pdf(buffer);
+    return data?.text || "";
+  } catch (err) {
+    console.warn("PDF parse failed (pdf-parse):", err?.message || err);
+    // Return empty string so callers can handle "no text"
+    return "";
+  }
 }
 
 // -------- OpenAI with retries --------
@@ -234,10 +248,10 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
 
   try {
     let text = "";
+
     if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
       const buffer = fs.readFileSync(filePath);
-      const data = await pdf(buffer);
-      text = data?.text || "";
+      text = await safeParsePdfBuffer(buffer);
     } else if (originalName.toLowerCase().endsWith(".docx")) {
       const result = await mammoth.extractRawText({ path: filePath });
       text = result?.value || "";
@@ -253,7 +267,7 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
         keywords: [],
         skillsFound: [],
         topTokens: [],
-        message: "No extractable text (maybe scanned PDF?)",
+        message: "No extractable text found. The file might be scanned or corrupted.",
       });
     }
 
@@ -287,7 +301,7 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
 
       if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
         const buffer = fs.readFileSync(filePath);
-        text = (await pdf(buffer)).text || "";
+        text = await safeParsePdfBuffer(buffer);
       } else if (originalName.toLowerCase().endsWith(".docx")) {
         text = (await mammoth.extractRawText({ path: filePath })).value || "";
       } else {
