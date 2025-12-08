@@ -1,11 +1,12 @@
 // server.js
-// Robust Express backend for AI Resume Analyzer
+// Express backend for AI Resume Analyzer
 // - File upload & parsing (PDF/DOCX/TXT)
-// - Keyword extraction (local, no extra deps)
-// - OpenAI call with retries & exponential backoff
-// - Guaranteed atsScore (0–100) using AI or heuristic fallback
+// - Keyword extraction
+// - OpenAI analysis with retries
+// - Guaranteed atsScore with fallback
+// - Safe PDF parsing (avoids bad XRef errors)
 // - Mock mode via OPENAI_MOCK
-// - Rate limiting via express-rate-limit
+// - Simple in-memory auth for login/register (no DB)
 // - Serves Vite dist/ build in production
 
 import express from "express";
@@ -48,6 +49,10 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
 });
 
+// -------- In-memory fake users (for demo only) --------
+// NOTE: This resets whenever the server restarts. No real DB yet.
+const users = [];
+
 // -------- Keyword extraction helpers --------
 const COMMON_STOPWORDS = new Set([
   "a","an","the","and","or","of","to","in","on","for","with","by","as","is","are","was","were",
@@ -67,8 +72,8 @@ const SKILLS_LIST = [
 
 function tokenizeForKeywords(text) {
   return text
-    .replace(/[\u2012\u2013\u2014]/g, "-") // normalize dashes
-    .replace(/[^\w\- ]+/g, " ")           // keep letters, numbers, underscore, dash, space
+    .replace(/[\u2012\u2013\u2014]/g, "-")
+    .replace(/[^\w\- ]+/g, " ")
     .toLowerCase()
     .split(/\s+/)
     .filter(Boolean);
@@ -135,7 +140,6 @@ function estimateAtsScoreFromText(text, kw) {
   if (keywordCount > 10) score += 10;
   if (keywordCount > 15) score += 10;
 
-  // clamp between 30 and 95
   if (score < 30) score = 30;
   if (score > 95) score = 95;
 
@@ -180,14 +184,13 @@ function extractJsonFromText(text) {
   return null;
 }
 
-// -------- Safe PDF parsing (handles bad XRef entry) --------
+// -------- Safe PDF parsing --------
 async function safeParsePdfBuffer(buffer) {
   try {
     const data = await pdf(buffer);
     return data?.text || "";
   } catch (err) {
     console.warn("PDF parse failed (pdf-parse):", err?.message || err);
-    // Return empty string so callers can handle "no text"
     return "";
   }
 }
@@ -219,7 +222,6 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
 
       lastErrText = `status=${resp.status} body=${txt}`;
 
-      // Retry only on 429 or 5xx
       if (resp.status !== 429 && !(resp.status >= 500 && resp.status < 600)) {
         return { ok: false, text: txt, status: resp.status };
       }
@@ -237,7 +239,108 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
   return { ok: false, text: lastErrText || "exhausted retries", status: 429 };
 }
 
-// -------- /api/parse: text + keywords --------
+// =====================================================
+//  AUTH ROUTES (FAKE, IN-MEMORY)
+// =====================================================
+
+// Register
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { fullName, email, password, role, company } = req.body;
+
+    if (!fullName || !email || !password || !role) {
+      return res
+        .status(400)
+        .json({ error: "fullName, email, password and role are required." });
+    }
+
+    const existing = users.find((u) => u.email === email);
+    if (existing) {
+      return res.status(409).json({ error: "User already exists. Please log in." });
+    }
+
+    const user = {
+      id: users.length + 1,
+      fullName,
+      email,
+      password, // NOTE: plain text for demo only — don't do this in production
+      role,     // "candidate" or "recruiter"
+      company: role === "recruiter" ? company || "" : undefined,
+      createdAt: new Date().toISOString(),
+    };
+
+    users.push(user);
+
+    const token = `mock-token-${user.id}-${Date.now()}`;
+
+    return res.json({
+      message: "Registration successful.",
+      token,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+      },
+    });
+  } catch (err) {
+    console.error("Register error:", err);
+    return res
+      .status(500)
+      .json({ error: "Internal error during registration." });
+  }
+});
+
+// Login
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { email, password, role } = req.body;
+
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Email and password are required." });
+    }
+
+    const user = users.find((u) => u.email === email);
+    if (!user) {
+      return res.status(401).json({ error: "User not found. Please register." });
+    }
+
+    if (user.password !== password) {
+      return res.status(401).json({ error: "Invalid password." });
+    }
+
+    if (role && user.role !== role) {
+      return res.status(403).json({
+        error: `This account is registered as "${user.role}", not "${role}".`,
+      });
+    }
+
+    const token = `mock-token-${user.id}-${Date.now()}`;
+
+    return res.json({
+      message: "Login successful.",
+      token,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+      },
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ error: "Internal error during login." });
+  }
+});
+
+// =====================================================
+//  PARSE + ANALYZE ROUTES
+// =====================================================
+
 app.post("/api/parse", upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: "No file uploaded." });
@@ -288,7 +391,6 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
   }
 });
 
-// -------- /api/analyze: OpenAI + keywords + atsScore --------
 app.post("/api/analyze", upload.single("file"), async (req, res) => {
   let filePath;
   try {
@@ -321,10 +423,8 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       });
     }
 
-    // Local keyword extraction
     const kw = extractKeywords(text);
 
-    // Mock mode: skip OpenAI entirely
     const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
     if (USE_MOCK) {
       const mock = {
@@ -346,7 +446,6 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
       return res.json(mock);
     }
 
-    // Build prompt for AI
     const prompt = `You are an expert resume reviewer. Given the resume text between triple backticks, return ONLY valid JSON with keys:
 - atsScore (integer 0-100),
 - topSkills (array of strings),
@@ -374,7 +473,6 @@ ${text.slice(0, 6000)}
     if (!openaiResult.ok) {
       console.error("OpenAI call failed after retries:", openaiResult);
 
-      // Non-retryable error (401, 403, etc.)
       if (openaiResult.status && openaiResult.status !== 429) {
         return res.status(502).json({
           error: "AI provider returned an error",
@@ -383,7 +481,6 @@ ${text.slice(0, 6000)}
         });
       }
 
-      // Rate limited or exhausted retries: return graceful fallback
       return res.status(200).json({
         error: "AI provider rate-limited or unavailable. Returning keyword-only analysis.",
         details: openaiResult.text,
@@ -403,7 +500,6 @@ ${text.slice(0, 6000)}
     }
 
     if (!parsed) {
-      // Could not parse JSON, return raw AI text + local keywords + estimated ATS
       return res.status(200).json({
         raw: rawText,
         atsScore: estimateAtsScoreFromText(text, kw),
@@ -413,12 +509,10 @@ ${text.slice(0, 6000)}
       });
     }
 
-    // Ensure keyword fields exist
     if (!parsed.keywords) parsed.keywords = kw.keywords;
     if (!parsed.skillsFound) parsed.skillsFound = kw.skillsFound;
     if (!parsed.topTokens) parsed.topTokens = kw.topTokens;
 
-    // Ensure atsScore is always a valid number 0–100
     if (
       parsed.atsScore === undefined ||
       parsed.atsScore === null ||
@@ -446,7 +540,10 @@ ${text.slice(0, 6000)}
   }
 });
 
-// -------- Serve frontend build (Vite dist) --------
+// =====================================================
+//  STATIC FRONTEND
+// =====================================================
+
 const DIST_DIR = path.join(__dirname, "dist");
 if (fs.existsSync(DIST_DIR)) {
   app.use(express.static(DIST_DIR));
@@ -458,10 +555,12 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn("dist folder not found — run `npm run build` to generate it.");
 }
 
-// -------- Health check --------
-app.get("/healthz", (_, res) => res.json({ status: "ok", time: new Date().toISOString() }));
+// Health check
+app.get("/healthz", (_, res) =>
+  res.json({ status: "ok", time: new Date().toISOString() })
+);
 
-// -------- Start server --------
+// Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on PORT=${PORT}`);
