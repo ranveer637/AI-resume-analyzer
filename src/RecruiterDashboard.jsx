@@ -2,54 +2,28 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-const MOCK_CANDIDATES = [
-  {
-    id: 1,
-    name: "John Doe",
-    role: "Frontend Developer",
-    atsScore: 82,
-    skills: ["React", "JavaScript", "Tailwind"],
-    status: "Shortlisted",
-    appliedOn: "2025-12-01",
-  },
-  {
-    id: 2,
-    name: "Sarah Johnson",
-    role: "Data Analyst",
-    atsScore: 76,
-    skills: ["Python", "SQL", "Tableau"],
-    status: "Under Review",
-    appliedOn: "2025-12-02",
-  },
-  {
-    id: 3,
-    name: "Amit Verma",
-    role: "Backend Developer",
-    atsScore: 69,
-    skills: ["Node.js", "Express", "MongoDB"],
-    status: "Rejected",
-    appliedOn: "2025-11-28",
-  },
-  {
-    id: 4,
-    name: "Priya Sharma",
-    role: "Full Stack Developer",
-    atsScore: 90,
-    skills: ["React", "Node.js", "AWS"],
-    status: "Interview Scheduled",
-    appliedOn: "2025-12-03",
-  },
-];
-
 export default function RecruiterDashboard() {
-  const [minScore, setMinScore] = useState(0);
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [search, setSearch] = useState("");
   const [currentUser, setCurrentUser] = useState(null);
+
+  const [jobs, setJobs] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsError, setJobsError] = useState("");
+
+  // New job form
+  const [title, setTitle] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [location, setLocation] = useState("");
+  const [qualifications, setQualifications] = useState("");
+  const [description, setDescription] = useState("");
+  const [creatingJob, setCreatingJob] = useState(false);
+  const [createMsg, setCreateMsg] = useState("");
 
   const navigate = useNavigate();
 
-  // Protect route: only recruiters allowed
+  const API_BASE = import.meta.env.VITE_API_URL || "";
+  const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
+
+  // Protect route + load recruiter jobs
   useEffect(() => {
     try {
       const raw = localStorage.getItem("user");
@@ -63,9 +37,12 @@ export default function RecruiterDashboard() {
         return;
       }
       setCurrentUser(user);
+      setCompanyName(user.company || "");
+      loadJobs(user.email);
     } catch {
       navigate("/login");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
 
   const handleLogout = () => {
@@ -74,35 +51,75 @@ export default function RecruiterDashboard() {
     navigate("/login");
   };
 
-  const filtered = MOCK_CANDIDATES.filter((c) => {
-    if (c.atsScore < minScore) return false;
-    if (statusFilter !== "all" && c.status !== statusFilter) return false;
-    if (
-      search &&
-      !(
-        c.name.toLowerCase().includes(search.toLowerCase()) ||
-        c.role.toLowerCase().includes(search.toLowerCase())
-      )
-    ) {
-      return false;
+  const loadJobs = async (email) => {
+    if (!email) return;
+    try {
+      setJobsLoading(true);
+      setJobsError("");
+      const res = await fetch(
+        apiUrl(`/api/recruiter/jobs?recruiterEmail=${encodeURIComponent(email)}`)
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setJobsError(data.error || "Failed to fetch your jobs.");
+        return;
+      }
+      setJobs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Recruiter jobs error:", err);
+      setJobsError("Failed to fetch your jobs.");
+    } finally {
+      setJobsLoading(false);
     }
-    return true;
-  });
+  };
 
-  const avgScore =
-    MOCK_CANDIDATES.length > 0
-      ? Math.round(
-          MOCK_CANDIDATES.reduce((sum, c) => sum + c.atsScore, 0) /
-            MOCK_CANDIDATES.length
-        )
-      : 0;
+  const handleCreateJob = async (e) => {
+    e.preventDefault();
+    if (!currentUser) return;
 
-  const shortlistedCount = MOCK_CANDIDATES.filter(
-    (c) => c.status === "Shortlisted"
-  ).length;
-  const interviewCount = MOCK_CANDIDATES.filter(
-    (c) => c.status === "Interview Scheduled"
-  ).length;
+    setCreateMsg("");
+    setCreatingJob(true);
+
+    try {
+      const res = await fetch(apiUrl("/api/recruiter/jobs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          companyName: companyName || currentUser.company || "",
+          location,
+          qualifications,
+          description,
+          recruiterEmail: currentUser.email,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateMsg(data.error || "Failed to create job.");
+        return;
+      }
+
+      setCreateMsg("✅ Job posted successfully!");
+      setTitle("");
+      setLocation("");
+      setQualifications("");
+      setDescription("");
+
+      // Reload jobs
+      await loadJobs(currentUser.email);
+    } catch (err) {
+      console.error("Create job error:", err);
+      setCreateMsg("Failed to create job. Please try again.");
+    } finally {
+      setCreatingJob(false);
+    }
+  };
+
+  const totalApplications = jobs.reduce(
+    (sum, j) => sum + (j.applications?.length || 0),
+    0
+  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -123,7 +140,7 @@ export default function RecruiterDashboard() {
                 Hiring Manager Dashboard
               </h1>
               <p className="text-xs text-slate-400">
-                Review candidates, ATS scores & statuses
+                Post roles, review candidates & ATS scores
               </p>
             </div>
           </div>
@@ -137,7 +154,9 @@ export default function RecruiterDashboard() {
             </Link>
             {currentUser && (
               <span className="hidden sm:inline text-[11px] text-slate-300 mr-1">
-                Hi, {currentUser.fullName.split(" ")[0]}
+                {currentUser.company
+                  ? `${currentUser.company}`
+                  : currentUser.fullName}
               </span>
             )}
             <button
@@ -155,148 +174,227 @@ export default function RecruiterDashboard() {
         {/* Summary cards */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-            <p className="text-xs text-slate-400">Average ATS score</p>
-            <p className="mt-1 text-2xl font-semibold">{avgScore}/100</p>
+            <p className="text-xs text-slate-400">Total job posts</p>
+            <p className="mt-1 text-2xl font-semibold">{jobs.length}</p>
             <p className="mt-1 text-[11px] text-slate-500">
-              Across all uploaded candidates
+              Jobs you have listed
             </p>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-            <p className="text-xs text-slate-400">Shortlisted</p>
-            <p className="mt-1 text-2xl font-semibold">{shortlistedCount}</p>
+            <p className="text-xs text-slate-400">Total applications</p>
+            <p className="mt-1 text-2xl font-semibold">{totalApplications}</p>
             <p className="mt-1 text-[11px] text-slate-500">
-              Candidates marked as shortlisted
+              Across all your roles
             </p>
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4">
-            <p className="text-xs text-slate-400">Interviews scheduled</p>
-            <p className="mt-1 text-2xl font-semibold">{interviewCount}</p>
+            <p className="text-xs text-slate-400">Account</p>
+            <p className="mt-1 text-xs text-slate-200">
+              {currentUser?.email || "Loading..."}
+            </p>
             <p className="mt-1 text-[11px] text-slate-500">
-              Upcoming interview candidates
+              Role: Recruiter / Hiring manager
             </p>
           </div>
         </section>
 
-        {/* Filters + table */}
-        <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 space-y-4">
-          {/* Filters */}
-          <div className="flex flex-col md:flex-row gap-3 md:items-end md:justify-between">
-            <div className="flex-1 flex flex-col gap-1">
-              <label className="text-xs text-slate-300">Search</label>
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by candidate name or role"
-                className="rounded-lg bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
+        {/* New job form + job list */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* New job form */}
+          <div className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
+            <h2 className="text-sm font-semibold mb-1">Post a new job</h2>
 
-            <div className="flex gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-300">Min ATS Score</label>
+            {createMsg && (
+              <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/40 rounded p-2">
+                {createMsg}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateJob} className="space-y-3 text-xs">
+              <div>
+                <label className="block mb-1 text-slate-300">Job title</label>
                 <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={minScore}
-                  onChange={(e) => setMinScore(Number(e.target.value) || 0)}
-                  className="w-24 rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  required
+                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  placeholder="e.g. Senior Backend Engineer"
                 />
               </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-300">Status</label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="rounded-lg bg-slate-950 border border-slate-700 px-2 py-1.5 text-sm outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                >
-                  <option value="all">All</option>
-                  <option value="Shortlisted">Shortlisted</option>
-                  <option value="Interview Scheduled">
-                    Interview Scheduled
-                  </option>
-                  <option value="Under Review">Under Review</option>
-                  <option value="Rejected">Rejected</option>
-                </select>
+              <div>
+                <label className="block mb-1 text-slate-300">
+                  Company name
+                </label>
+                <input
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  required
+                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  placeholder="e.g. TechSolutions Global"
+                />
               </div>
-            </div>
+
+              <div>
+                <label className="block mb-1 text-slate-300">Location</label>
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  placeholder="Remote / City, Country"
+                />
+              </div>
+
+              <div>
+                <label className="block mb-1 text-slate-300">
+                  Required qualifications
+                </label>
+                <textarea
+                  value={qualifications}
+                  onChange={(e) => setQualifications(e.target.value)}
+                  required
+                  rows={4}
+                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  placeholder="Required skills, experience, education..."
+                />
+              </div>
+
+              <div>
+                <label className="block mb-1 text-slate-300">
+                  Job description (optional)
+                </label>
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                  placeholder="What will the candidate work on?"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={creatingJob}
+                className="w-full mt-1 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-xs font-semibold"
+              >
+                {creatingJob ? "Posting..." : "Post job"}
+              </button>
+            </form>
           </div>
 
-          {/* Candidate list */}
-          <div className="mt-2 overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b border-white/10 text-slate-400">
-                  <th className="text-left py-2 pr-4">Candidate</th>
-                  <th className="text-left py-2 pr-4">Role</th>
-                  <th className="text-left py-2 pr-4">ATS Score</th>
-                  <th className="text-left py-2 pr-4">Skills</th>
-                  <th className="text-left py-2 pr-4">Status</th>
-                  <th className="text-left py-2">Applied</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      className="py-4 text-center text-slate-500"
-                    >
-                      No candidates match the current filters.
-                    </td>
-                  </tr>
-                )}
+          {/* Your jobs & applications */}
+          <div className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Your job posts</h2>
+              {jobsLoading && (
+                <span className="text-[11px] text-slate-400">
+                  Loading jobs...
+                </span>
+              )}
+            </div>
 
-                {filtered.map((c) => (
-                  <tr
-                    key={c.id}
-                    className="border-b border-white/5 hover:bg-slate-800/60"
-                  >
-                    <td className="py-2 pr-4">
-                      <div className="font-semibold text-slate-100">
-                        {c.name}
+            {jobsError && (
+              <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">
+                {jobsError}
+              </div>
+            )}
+
+            {jobs.length === 0 && !jobsLoading && !jobsError && (
+              <p className="text-xs text-slate-400">
+                You haven't posted any jobs yet.
+              </p>
+            )}
+
+            <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
+              {jobs.map((job) => (
+                <div
+                  key={job._id}
+                  className="rounded-xl border border-white/10 bg-slate-950/60 p-4 text-xs space-y-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-semibold text-slate-100">
+                        {job.title}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        {job.companyName} •{" "}
+                        {job.location || "Location not specified"}
+                      </p>
+                    </div>
+                    <div className="text-right text-[11px] text-slate-400">
+                      <div>
+                        {job.applications?.length || 0} applications
                       </div>
-                    </td>
-                    <td className="py-2 pr-4 text-slate-200">{c.role}</td>
-                    <td className="py-2 pr-4">
-                      <span
-                        className={`px-2 py-1 rounded-full text-[11px] ${
-                          c.atsScore >= 80
-                            ? "bg-emerald-500/20 text-emerald-200"
-                            : c.atsScore >= 60
-                            ? "bg-yellow-500/20 text-yellow-200"
-                            : "bg-rose-500/20 text-rose-200"
-                        }`}
-                      >
-                        {c.atsScore}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-4 max-w-xs">
-                      <div className="flex flex-wrap gap-1">
-                        {c.skills.map((s, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px]"
+                      <div>
+                        {new Date(job.createdAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-slate-300 whitespace-pre-wrap line-clamp-3">
+                    <strong>Qualifications:</strong> {job.qualifications}
+                  </div>
+
+                  {job.description && (
+                    <div className="text-[11px] text-slate-400 whitespace-pre-wrap line-clamp-3">
+                      {job.description}
+                    </div>
+                  )}
+
+                  {/* Applications */}
+                  {job.applications && job.applications.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-[11px] text-indigo-300">
+                        View applications ({job.applications.length})
+                      </summary>
+                      <div className="mt-2 space-y-1">
+                        {job.applications.map((app, idx) => (
+                          <div
+                            key={idx}
+                            className="border border-white/10 rounded-lg px-2 py-1.5 bg-slate-900/80"
                           >
-                            {s}
-                          </span>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-semibold text-[11px]">
+                                  {app.candidateName}
+                                </div>
+                                <div className="text-[10px] text-slate-400">
+                                  {app.candidateEmail}
+                                </div>
+                              </div>
+                              <div className="text-right text-[10px] text-slate-400">
+                                <div>
+                                  {app.atsScore != null
+                                    ? `ATS: ${app.atsScore}/100`
+                                    : "ATS: N/A"}
+                                </div>
+                                <div>
+                                  {app.createdAt
+                                    ? new Date(
+                                        app.createdAt
+                                      ).toLocaleDateString()
+                                    : ""}
+                                </div>
+                              </div>
+                            </div>
+                            {app.notes && (
+                              <div className="mt-1 text-[10px] text-slate-300">
+                                {app.notes}
+                              </div>
+                            )}
+                          </div>
                         ))}
                       </div>
-                    </td>
-                    <td className="py-2 pr-4">
-                      <span className="px-2 py-1 rounded-full bg-slate-800 text-[11px]">
-                        {c.status}
-                      </span>
-                    </td>
-                    <td className="py-2 text-slate-300">{c.appliedOn}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       </main>
