@@ -13,6 +13,12 @@ export default function App() {
 
   const [currentUser, setCurrentUser] = useState(null);
 
+  // Jobs for candidates
+  const [jobs, setJobs] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsError, setJobsError] = useState("");
+  const [applyStatus, setApplyStatus] = useState({}); // jobId -> message
+
   const fileRef = useRef(null);
   const navigate = useNavigate();
 
@@ -30,6 +36,30 @@ export default function App() {
       setCurrentUser(null);
     }
   }, []);
+
+  // Load jobs for candidates
+  useEffect(() => {
+    const loadJobs = async () => {
+      try {
+        setJobsLoading(true);
+        setJobsError("");
+        const res = await fetch(apiUrl("/api/jobs"));
+        const data = await res.json();
+        if (!res.ok) {
+          setJobsError(data.error || "Failed to fetch jobs.");
+          return;
+        }
+        setJobs(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("Jobs fetch error:", err);
+        setJobsError("Failed to fetch jobs.");
+      } finally {
+        setJobsLoading(false);
+      }
+    };
+
+    loadJobs();
+  }, []); // run once
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -64,8 +94,6 @@ export default function App() {
       });
 
       const raw = await res.text();
-      console.log("ANALYZE raw response:", raw);
-
       let data;
       try {
         data = JSON.parse(raw);
@@ -111,7 +139,6 @@ export default function App() {
       });
 
       const raw = await res.text();
-      console.log("PARSE raw response:", raw);
 
       let data;
       try {
@@ -120,7 +147,6 @@ export default function App() {
         data = { text: raw };
       }
 
-      // Decide what to show in "Extracted Resume Text"
       let displayText = "";
       if (data.text && data.text.trim().length > 0) {
         displayText = data.text;
@@ -154,6 +180,64 @@ export default function App() {
       ? Math.min(100, Math.max(0, Number(atsScore)))
       : null;
 
+  // -----------------------------------------------------
+  // Candidate applies to a job
+  // -----------------------------------------------------
+  const handleApplyToJob = async (jobId) => {
+    if (!currentUser) {
+      alert("Please login as a candidate to apply.");
+      navigate("/login");
+      return;
+    }
+
+    if (currentUser.role !== "candidate") {
+      alert("Only candidate accounts can apply to jobs.");
+      return;
+    }
+
+    if (!parsedText && !fileRef.current?.files?.[0]) {
+      const confirmUpload = confirm(
+        "You have not uploaded/analyzed a resume in this session. Apply anyway?"
+      );
+      if (!confirmUpload) return;
+    }
+
+    try {
+      const body = {
+        candidateName: currentUser.fullName,
+        candidateEmail: currentUser.email,
+        atsScore: atsDisplay ?? undefined,
+        notes: "Applied via AI Resume Analyzer",
+      };
+
+      const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setApplyStatus((prev) => ({
+          ...prev,
+          [jobId]: data.error || "Failed to apply.",
+        }));
+        return;
+      }
+
+      setApplyStatus((prev) => ({
+        ...prev,
+        [jobId]: "✅ Application submitted!",
+      }));
+    } catch (err) {
+      console.error("Apply error:", err);
+      setApplyStatus((prev) => ({
+        ...prev,
+        [jobId]: "Failed to apply. Please try again.",
+      }));
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       {/* Background */}
@@ -171,7 +255,7 @@ export default function App() {
             <div>
               <h1 className="text-lg font-semibold">AI Resume Analyzer</h1>
               <p className="text-xs text-slate-400">
-                ATS-friendly resume insights
+                ATS-friendly resume insights & job matching
               </p>
             </div>
           </div>
@@ -228,20 +312,21 @@ export default function App() {
       </header>
 
       {/* MAIN */}
-      <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-8">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-8 space-y-8">
         {/* Steps */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
             Upload resume
           </div>
           <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            Extract keywords
+            Extract keywords & ATS score
           </div>
           <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            AI feedback
+            Apply to matching jobs
           </div>
         </section>
 
+        {/* Analyzer + ATS */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* LEFT PANEL */}
           <div className="space-y-4">
@@ -257,7 +342,9 @@ export default function App() {
                   onChange={handleFileChange}
                   className="hidden"
                 />
-                <span className="font-medium">Click to upload</span>
+                <span className="font-medium">
+                  {loading ? "Processing..." : "Click to upload"}
+                </span>
                 <span className="text-xs text-slate-400">
                   PDF, DOCX, TXT • 15MB max
                 </span>
@@ -346,7 +433,6 @@ export default function App() {
 
               {analysis && !analysis.error && (
                 <div className="text-xs space-y-3">
-                  {/* Top Skills */}
                   {analysis.topSkills?.length > 0 && (
                     <div>
                       <h4 className="font-semibold mb-1">Top Skills</h4>
@@ -363,7 +449,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Suggestions */}
                   {analysis.suggestions?.length > 0 && (
                     <div>
                       <h4 className="font-semibold mb-1">Suggestions</h4>
@@ -375,7 +460,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Rewritten Bullet Points */}
                   {analysis.rewrittenBullets?.length > 0 && (
                     <div>
                       <h4 className="font-semibold mb-1">
@@ -388,16 +472,6 @@ export default function App() {
                       </ul>
                     </div>
                   )}
-
-                  {/* Fallback if AI responded but no arrays */}
-                  {!analysis.topSkills &&
-                    !analysis.suggestions &&
-                    !analysis.rewrittenBullets &&
-                    !analysis.raw && (
-                      <p className="text-xs text-slate-400">
-                        AI responded, but no structured fields were returned.
-                      </p>
-                    )}
 
                   {analysis.raw && (
                     <details className="mt-2 text-[10px] text-slate-400">
@@ -412,10 +486,79 @@ export default function App() {
             </div>
           </div>
         </section>
+
+        {/* JOB LISTINGS FOR CANDIDATE */}
+        <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Open Positions</h2>
+            {jobsLoading && (
+              <span className="text-[11px] text-slate-400">
+                Loading jobs...
+              </span>
+            )}
+          </div>
+
+          {jobsError && (
+            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">
+              {jobsError}
+            </div>
+          )}
+
+          {jobs.length === 0 && !jobsLoading && !jobsError && (
+            <p className="text-xs text-slate-400">
+              No jobs posted yet. Check back later.
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {jobs.map((job) => (
+              <div
+                key={job._id}
+                className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2"
+              >
+                <div>
+                  <h3 className="text-sm font-semibold">
+                    {job.title}{" "}
+                    <span className="text-[11px] text-slate-400">
+                      • {job.companyName}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {job.location || "Not specified"}
+                  </p>
+                </div>
+
+                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
+                  <strong>Required qualifications:</strong>{" "}
+                  {job.qualifications}
+                </div>
+
+                {job.description && (
+                  <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">
+                    {job.description}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => handleApplyToJob(job._id)}
+                  className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
+                >
+                  Apply with this resume
+                </button>
+
+                {applyStatus[job._id] && (
+                  <p className="text-[11px] mt-1 text-emerald-300">
+                    {applyStatus[job._id]}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
       </main>
 
       <footer className="border-t border-white/10 text-center py-3 text-[11px] text-slate-500">
-        © {new Date().getFullYear()} AI Resume Analyzer • Built with React + Express
+        © {new Date().getFullYear()} AI Resume Analyzer • Built with React + Express + MongoDB
       </footer>
     </div>
   );
