@@ -1,13 +1,9 @@
 // server.js
-// Express backend for AI Resume Analyzer
+// Express backend for AI Resume Analyzer + Job Board
+// - Auth (in-memory, demo)
 // - File upload & parsing (PDF/DOCX/TXT)
-// - Keyword extraction
-// - OpenAI analysis with retries
-// - Guaranteed atsScore with fallback
-// - Safe PDF parsing (avoids bad XRef errors)
-// - Mock mode via OPENAI_MOCK
-// - Simple in-memory auth for login/register (no DB)
-// - Serves Vite dist/ build in production
+// - OpenAI analysis (or mock mode)
+// - MongoDB (Mongoose) for Job Posts + Applications
 
 import express from "express";
 import multer from "multer";
@@ -20,6 +16,7 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -33,12 +30,53 @@ app.use(express.urlencoded({ extended: true }));
 
 // -------- Rate limiting --------
 const limiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 60, // per-IP per minute
+  windowMs: 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use(limiter);
+
+// -------- MongoDB connection --------
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.warn("⚠️ MONGODB_URI is not set. Job posting features will not work.");
+}
+
+mongoose
+  .connect(MONGODB_URI, {
+    dbName: process.env.MONGODB_DB || "ai-resume-analyzer",
+  })
+  .then(() => console.log("✅ Connected to MongoDB"))
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
+
+// -------- Mongoose Schemas --------
+const ApplicationSchema = new mongoose.Schema(
+  {
+    candidateName: { type: String, required: true },
+    candidateEmail: { type: String, required: true },
+    atsScore: { type: Number },
+    notes: { type: String },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const JobSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    companyName: { type: String, required: true },
+    location: { type: String, default: "Not specified" },
+    qualifications: { type: String, required: true },
+    description: { type: String, default: "" },
+    recruiterEmail: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+    applications: [ApplicationSchema],
+  },
+  { collection: "jobs" }
+);
+
+const Job = mongoose.model("Job", JobSchema);
 
 // -------- Uploads directory --------
 const UPLOADS_DIR = path.join(__dirname, "uploads");
@@ -46,11 +84,10 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOADS_DIR,
-  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
 // -------- In-memory fake users (for demo only) --------
-// NOTE: This resets whenever the server restarts. No real DB yet.
 const users = [];
 
 // -------- Keyword extraction helpers --------
@@ -68,7 +105,7 @@ const SKILLS_LIST = [
   "python","pandas","numpy","scikit-learn","tensorflow","pytorch","java","c++","c#","php","ruby",
   "machine learning","nlp","data analysis","sql","linux","bash","figma","photoshop","ui/ux","leadership",
   "communication","agile","scrum","devops","testing","ci/cd","performance","optimization","security"
-].map(s => s.toLowerCase());
+].map((s) => s.toLowerCase());
 
 function tokenizeForKeywords(text) {
   return text
@@ -114,10 +151,12 @@ function extractKeywords(text, opts = {}) {
 
   const skillList = Array.from(foundSkills.entries())
     .sort((a, b) => b[1] - a[1])
-    .map(x => x[0]);
+    .map((x) => x[0]);
 
-  const topTokens = topFrequent.map(x => x.token);
-  const combined = [...skillList, ...topTokens].filter((v, i, a) => a.indexOf(v) === i);
+  const topTokens = topFrequent.map((x) => x.token);
+  const combined = [...skillList, ...topTokens].filter(
+    (v, i, a) => a.indexOf(v) === i
+  );
 
   return {
     keywords: combined.slice(0, 30),
@@ -131,7 +170,6 @@ function estimateAtsScoreFromText(text, kw) {
   const words = (text || "").split(/\s+/).filter(Boolean);
   const length = words.length;
   const keywordCount = (kw?.keywords || []).length;
-
   let score = 40;
 
   if (length > 150) score += 10;
@@ -142,7 +180,6 @@ function estimateAtsScoreFromText(text, kw) {
 
   if (score < 30) score = 30;
   if (score > 95) score = 95;
-
   return score;
 }
 
@@ -150,9 +187,7 @@ function estimateAtsScoreFromText(text, kw) {
 function safeUnlink(filePath) {
   try {
     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch {
-    // ignore
-  }
+  } catch {}
 }
 
 function readFileUtf8(filePath) {
@@ -164,7 +199,6 @@ function extractJsonFromText(text) {
   try {
     return JSON.parse(text);
   } catch {}
-
   const firstCurly = text.indexOf("{");
   const lastCurly = text.lastIndexOf("}");
   if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
@@ -172,15 +206,6 @@ function extractJsonFromText(text) {
       return JSON.parse(text.slice(firstCurly, lastCurly + 1));
     } catch {}
   }
-
-  const firstBracket = text.indexOf("[");
-  const lastBracket = text.lastIndexOf("]");
-  if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-    try {
-      return JSON.parse(text.slice(firstBracket, lastBracket + 1));
-    } catch {}
-  }
-
   return null;
 }
 
@@ -197,12 +222,11 @@ async function safeParsePdfBuffer(buffer) {
 
 // -------- OpenAI with retries --------
 async function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
   let lastErrText = null;
-
   for (let i = 0; i < attempts; i++) {
     try {
       const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -221,7 +245,6 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
       }
 
       lastErrText = `status=${resp.status} body=${txt}`;
-
       if (resp.status !== 429 && !(resp.status >= 500 && resp.status < 600)) {
         return { ok: false, text: txt, status: resp.status };
       }
@@ -235,7 +258,6 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
     );
     await sleep(delay);
   }
-
   return { ok: false, text: lastErrText || "exhausted retries", status: 429 };
 }
 
@@ -243,17 +265,14 @@ async function callOpenAIWithRetries(payload, attempts = 5, baseDelay = 800) {
 //  AUTH ROUTES (FAKE, IN-MEMORY)
 // =====================================================
 
-// Register
 app.post("/api/auth/register", (req, res) => {
   try {
     const { fullName, email, password, role, company } = req.body;
-
     if (!fullName || !email || !password || !role) {
       return res
         .status(400)
         .json({ error: "fullName, email, password and role are required." });
     }
-
     const existing = users.find((u) => u.email === email);
     if (existing) {
       return res.status(409).json({ error: "User already exists. Please log in." });
@@ -263,16 +282,14 @@ app.post("/api/auth/register", (req, res) => {
       id: users.length + 1,
       fullName,
       email,
-      password, // NOTE: plain text for demo only — don't do this in production
-      role,     // "candidate" or "recruiter"
+      password,
+      role,
       company: role === "recruiter" ? company || "" : undefined,
       createdAt: new Date().toISOString(),
     };
-
     users.push(user);
 
     const token = `mock-token-${user.id}-${Date.now()}`;
-
     return res.json({
       message: "Registration successful.",
       token,
@@ -286,17 +303,13 @@ app.post("/api/auth/register", (req, res) => {
     });
   } catch (err) {
     console.error("Register error:", err);
-    return res
-      .status(500)
-      .json({ error: "Internal error during registration." });
+    return res.status(500).json({ error: "Internal error during registration." });
   }
 });
 
-// Login
 app.post("/api/auth/login", (req, res) => {
   try {
     const { email, password, role } = req.body;
-
     if (!email || !password) {
       return res
         .status(400)
@@ -307,11 +320,9 @@ app.post("/api/auth/login", (req, res) => {
     if (!user) {
       return res.status(401).json({ error: "User not found. Please register." });
     }
-
     if (user.password !== password) {
       return res.status(401).json({ error: "Invalid password." });
     }
-
     if (role && user.role !== role) {
       return res.status(403).json({
         error: `This account is registered as "${user.role}", not "${role}".`,
@@ -319,7 +330,6 @@ app.post("/api/auth/login", (req, res) => {
     }
 
     const token = `mock-token-${user.id}-${Date.now()}`;
-
     return res.json({
       message: "Login successful.",
       token,
@@ -338,7 +348,98 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 // =====================================================
-//  PARSE + ANALYZE ROUTES
+//  JOB ROUTES (MongoDB)
+// =====================================================
+
+// Recruiter creates a job post
+app.post("/api/recruiter/jobs", async (req, res) => {
+  try {
+    const { title, companyName, location, qualifications, description, recruiterEmail } =
+      req.body;
+
+    if (!title || !companyName || !qualifications || !recruiterEmail) {
+      return res.status(400).json({
+        error: "title, companyName, qualifications, and recruiterEmail are required.",
+      });
+    }
+
+    const job = await Job.create({
+      title,
+      companyName,
+      location: location || "Not specified",
+      qualifications,
+      description: description || "",
+      recruiterEmail,
+    });
+
+    return res.json({ message: "Job created successfully.", job });
+  } catch (err) {
+    console.error("Create job error:", err);
+    return res.status(500).json({ error: "Failed to create job." });
+  }
+});
+
+// Candidate: list all jobs
+app.get("/api/jobs", async (req, res) => {
+  try {
+    const jobs = await Job.find().sort({ createdAt: -1 }).lean();
+    return res.json(jobs);
+  } catch (err) {
+    console.error("List jobs error:", err);
+    return res.status(500).json({ error: "Failed to fetch jobs." });
+  }
+});
+
+// Recruiter: list own jobs
+app.get("/api/recruiter/jobs", async (req, res) => {
+  try {
+    const { recruiterEmail } = req.query;
+    if (!recruiterEmail) {
+      return res.status(400).json({ error: "recruiterEmail is required in query." });
+    }
+    const jobs = await Job.find({ recruiterEmail }).sort({ createdAt: -1 }).lean();
+    return res.json(jobs);
+  } catch (err) {
+    console.error("List recruiter jobs error:", err);
+    return res.status(500).json({ error: "Failed to fetch recruiter jobs." });
+  }
+});
+
+// Candidate applies to a job
+app.post("/api/jobs/:jobId/apply", async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { candidateName, candidateEmail, atsScore, notes } = req.body;
+
+    if (!candidateName || !candidateEmail) {
+      return res
+        .status(400)
+        .json({ error: "candidateName and candidateEmail are required." });
+    }
+
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ error: "Job not found." });
+    }
+
+    job.applications.push({
+      candidateName,
+      candidateEmail,
+      atsScore,
+      notes,
+    });
+
+    await job.save();
+
+    return res.json({ message: "Application submitted successfully." });
+  } catch (err) {
+    console.error("Apply job error:", err);
+    return res.status(500).json({ error: "Failed to apply for job." });
+  }
+});
+
+// =====================================================
+//  PARSE + ANALYZE ROUTES (existing)
 // =====================================================
 
 app.post("/api/parse", upload.single("file"), async (req, res) => {
@@ -425,7 +526,8 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
 
     const kw = extractKeywords(text);
 
-    const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
+    const USE_MOCK =
+      process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
     if (USE_MOCK) {
       const mock = {
         atsScore: estimateAtsScoreFromText(text, kw),
@@ -461,7 +563,10 @@ ${text.slice(0, 6000)}
     const payload = {
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are a helpful resume reviewer that outputs strict JSON." },
+        {
+          role: "system",
+          content: "You are a helpful resume reviewer that outputs strict JSON.",
+        },
         { role: "user", content: prompt },
       ],
       temperature: 0.2,
@@ -482,7 +587,8 @@ ${text.slice(0, 6000)}
       }
 
       return res.status(200).json({
-        error: "AI provider rate-limited or unavailable. Returning keyword-only analysis.",
+        error:
+          "AI provider rate-limited or unavailable. Returning keyword-only analysis.",
         details: openaiResult.text,
         atsScore: estimateAtsScoreFromText(text, kw),
         keywords: kw.keywords,
@@ -555,16 +661,11 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn("dist folder not found — run `npm run build` to generate it.");
 }
 
-// Health check
 app.get("/healthz", (_, res) =>
   res.json({ status: "ok", time: new Date().toISOString() })
 );
 
-// Start server
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on PORT=${PORT}`);
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn("OPENAI_API_KEY not set — server will run in mock mode unless you set it.");
-  }
 });
