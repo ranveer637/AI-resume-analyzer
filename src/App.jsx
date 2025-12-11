@@ -25,19 +25,13 @@ export default function App() {
   const API_BASE = import.meta.env.VITE_API_URL || "";
   const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
 
-  // Load user from localStorage on mount
   useEffect(() => {
     try {
       const raw = localStorage.getItem("user");
-      if (raw) {
-        setCurrentUser(JSON.parse(raw));
-      }
-    } catch {
-      setCurrentUser(null);
-    }
+      if (raw) setCurrentUser(JSON.parse(raw));
+    } catch {}
   }, []);
 
-  // Load jobs for candidates
   useEffect(() => {
     const loadJobs = async () => {
       try {
@@ -59,7 +53,7 @@ export default function App() {
     };
 
     loadJobs();
-  }, []); // run once
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -68,9 +62,7 @@ export default function App() {
     navigate("/login");
   };
 
-  // -----------------------------------------------------
-  // Analyze Resume with AI
-  // -----------------------------------------------------
+  // Analyze Resume
   const analyzeResume = async () => {
     if (!fileRef.current?.files?.[0] && !parsedText) {
       setAnalysis({ error: "Please upload a file first." });
@@ -112,9 +104,7 @@ export default function App() {
     }
   };
 
-  // -----------------------------------------------------
   // Upload + PARSE + Auto AI-Analyze
-  // -----------------------------------------------------
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -139,7 +129,6 @@ export default function App() {
       });
 
       const raw = await res.text();
-
       let data;
       try {
         data = JSON.parse(raw);
@@ -170,7 +159,7 @@ export default function App() {
       setLoading(false);
     }
 
-    // 2) Automatically run AI analysis (even if parse was partial)
+    // 2) Automatically run AI analysis
     await analyzeResume();
   };
 
@@ -180,9 +169,7 @@ export default function App() {
       ? Math.min(100, Math.max(0, Number(atsScore)))
       : null;
 
-  // -----------------------------------------------------
-  // Candidate applies to a job
-  // -----------------------------------------------------
+  // Candidate applies to a job (with resume file if available)
   const handleApplyToJob = async (jobId) => {
     if (!currentUser) {
       alert("Please login as a candidate to apply.");
@@ -191,50 +178,39 @@ export default function App() {
     }
 
     if (currentUser.role !== "candidate") {
-      alert("Only candidate accounts can apply to jobs.");
+      alert("Only candidate accounts can apply.");
       return;
     }
 
-    if (!parsedText && !fileRef.current?.files?.[0]) {
-      const confirmUpload = confirm(
-        "You have not uploaded/analyzed a resume in this session. Apply anyway?"
-      );
-      if (!confirmUpload) return;
-    }
-
     try {
-      const body = {
-        candidateName: currentUser.fullName,
-        candidateEmail: currentUser.email,
-        atsScore: atsDisplay ?? undefined,
-        notes: "Applied via AI Resume Analyzer",
-      };
+      setApplyStatus((s) => ({ ...s, [jobId]: "Applying..." }));
+
+      const formData = new FormData();
+      formData.append("candidateName", currentUser.fullName);
+      formData.append("candidateEmail", currentUser.email);
+      if (atsDisplay != null) formData.append("atsScore", String(atsDisplay));
+      formData.append("notes", "Applied via AI Resume Analyzer");
+
+      const file = fileRef.current?.files?.[0];
+      if (file) {
+        formData.append("file", file, file.name);
+      }
 
       const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: formData,
       });
 
       const data = await res.json();
       if (!res.ok) {
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: data.error || "Failed to apply.",
-        }));
+        setApplyStatus((s) => ({ ...s, [jobId]: data.error || "Failed to apply." }));
         return;
       }
 
-      setApplyStatus((prev) => ({
-        ...prev,
-        [jobId]: "✅ Application submitted!",
-      }));
+      setApplyStatus((s) => ({ ...s, [jobId]: "✅ Application submitted!" }));
     } catch (err) {
       console.error("Apply error:", err);
-      setApplyStatus((prev) => ({
-        ...prev,
-        [jobId]: "Failed to apply. Please try again.",
-      }));
+      setApplyStatus((s) => ({ ...s, [jobId]: "Failed to apply. Please try again." }));
     }
   };
 
@@ -330,7 +306,6 @@ export default function App() {
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* LEFT PANEL */}
           <div className="space-y-4">
-            {/* Upload */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h2 className="text-base font-semibold mb-3">Upload Resume</h2>
 
@@ -346,7 +321,7 @@ export default function App() {
                   {loading ? "Processing..." : "Click to upload"}
                 </span>
                 <span className="text-xs text-slate-400">
-                  PDF, DOCX, TXT • 15MB max
+                  PDF, DOCX, TXT • 20MB max
                 </span>
               </label>
 
@@ -355,31 +330,21 @@ export default function App() {
               </p>
             </div>
 
-            {/* Extracted text */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-              <h3 className="text-sm font-semibold mb-2">
-                Extracted Resume Text
-              </h3>
+              <h3 className="text-sm font-semibold mb-2">Extracted Resume Text</h3>
               <div className="h-56 overflow-y-auto bg-slate-950/60 border border-white/5 rounded-xl p-3 text-xs whitespace-pre-wrap">
                 {parsedText || "Upload a resume to extract text."}
               </div>
             </div>
 
-            {/* Keywords */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h3 className="text-sm font-semibold mb-2">Detected Keywords</h3>
-
               {keywords.length === 0 ? (
-                <p className="text-xs text-slate-400">
-                  Upload a resume to extract keywords.
-                </p>
+                <p className="text-xs text-slate-400">Upload a resume to extract keywords.</p>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {keywords.map((k, i) => (
-                    <span
-                      key={i}
-                      className="px-2 py-1 bg-indigo-500/15 border border-indigo-400/40 rounded-full text-[11px]"
-                    >
+                    <span key={i} className="px-2 py-1 bg-indigo-500/15 border border-indigo-400/40 rounded-full text-[11px]">
                       {k}
                     </span>
                   ))}
@@ -390,44 +355,28 @@ export default function App() {
 
           {/* RIGHT PANEL */}
           <div className="space-y-4">
-            {/* ATS Score */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h3 className="text-sm font-semibold">ATS Score</h3>
               <div className="flex items-center gap-4 mt-3">
                 <div className="relative h-20 w-20 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center">
                   <div className="absolute inset-[6px] rounded-full bg-gradient-to-br from-indigo-500 to-sky-500" />
                   <div className="absolute inset-[14px] rounded-full bg-slate-950 flex items-center justify-center">
-                    <span className="text-lg font-bold">
-                      {atsDisplay !== null ? atsDisplay : "--"}
-                    </span>
+                    <span className="text-lg font-bold">{atsDisplay !== null ? atsDisplay : "--"}</span>
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">
-                  Higher ATS score increases your chance of passing filters.
-                </p>
+                <p className="text-xs text-slate-400">Higher ATS score increases chance of passing filters.</p>
               </div>
             </div>
 
-            {/* AI Feedback */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-              <h3 className="text-sm font-semibold mb-2">
-                AI Feedback & Suggestions
-              </h3>
+              <h3 className="text-sm font-semibold mb-2">AI Feedback & Suggestions</h3>
 
-              {!analysis && (
-                <p className="text-xs text-slate-500">
-                  Upload a resume to see AI feedback.
-                </p>
-              )}
+              {!analysis && <p className="text-xs text-slate-500">Upload a resume to see AI feedback.</p>}
 
               {analysis?.error && (
                 <div className="text-xs bg-red-500/20 border border-red-500/40 p-3 rounded-lg text-red-200">
                   <strong>Error:</strong> {analysis.error}
-                  {analysis.details && (
-                    <div className="mt-1 text-[10px] opacity-80">
-                      {analysis.details}
-                    </div>
-                  )}
+                  {analysis.details && <div className="mt-1 text-[10px] opacity-80">{analysis.details}</div>}
                 </div>
               )}
 
@@ -438,12 +387,7 @@ export default function App() {
                       <h4 className="font-semibold mb-1">Top Skills</h4>
                       <div className="flex flex-wrap gap-1.5">
                         {analysis.topSkills.map((s, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-1 bg-emerald-500/20 rounded-full text-[11px]"
-                          >
-                            {s}
-                          </span>
+                          <span key={i} className="px-2 py-1 bg-emerald-500/20 rounded-full text-[11px]">{s}</span>
                         ))}
                       </div>
                     </div>
@@ -452,34 +396,19 @@ export default function App() {
                   {analysis.suggestions?.length > 0 && (
                     <div>
                       <h4 className="font-semibold mb-1">Suggestions</h4>
-                      <ul className="list-disc list-inside space-y-1">
-                        {analysis.suggestions.map((s, i) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ul>
+                      <ul className="list-disc list-inside space-y-1">{analysis.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>
                     </div>
                   )}
 
                   {analysis.rewrittenBullets?.length > 0 && (
                     <div>
-                      <h4 className="font-semibold mb-1">
-                        Improved Bullet Points
-                      </h4>
-                      <ul className="list-disc list-inside space-y-1">
-                        {analysis.rewrittenBullets.map((b, i) => (
-                          <li key={i}>{b}</li>
-                        ))}
-                      </ul>
+                      <h4 className="font-semibold mb-1">Improved Bullet Points</h4>
+                      <ul className="list-disc list-inside space-y-1">{analysis.rewrittenBullets.map((b, i) => <li key={i}>{b}</li>)}</ul>
                     </div>
                   )}
 
                   {analysis.raw && (
-                    <details className="mt-2 text-[10px] text-slate-400">
-                      <summary>Raw AI response</summary>
-                      <pre className="whitespace-pre-wrap mt-1">
-                        {analysis.raw}
-                      </pre>
-                    </details>
+                    <details className="mt-2 text-[10px] text-slate-400"><summary>Raw AI response</summary><pre className="whitespace-pre-wrap mt-1">{analysis.raw}</pre></details>
                   )}
                 </div>
               )}
@@ -491,66 +420,30 @@ export default function App() {
         <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">Open Positions</h2>
-            {jobsLoading && (
-              <span className="text-[11px] text-slate-400">
-                Loading jobs...
-              </span>
-            )}
+            {jobsLoading && <span className="text-[11px] text-slate-400">Loading jobs...</span>}
           </div>
 
-          {jobsError && (
-            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">
-              {jobsError}
-            </div>
-          )}
+          {jobsError && <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">{jobsError}</div>}
 
-          {jobs.length === 0 && !jobsLoading && !jobsError && (
-            <p className="text-xs text-slate-400">
-              No jobs posted yet. Check back later.
-            </p>
-          )}
+          {jobs.length === 0 && !jobsLoading && !jobsError && <p className="text-xs text-slate-400">No jobs posted yet. Check back later.</p>}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {jobs.map((job) => (
-              <div
-                key={job._id}
-                className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2"
-              >
+            {jobs.map(job => (
+              <div key={job._id} className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2">
                 <div>
-                  <h3 className="text-sm font-semibold">
-                    {job.title}{" "}
-                    <span className="text-[11px] text-slate-400">
-                      • {job.companyName}
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    {job.location || "Not specified"}
-                  </p>
+                  <h3 className="text-sm font-semibold">{job.title} <span className="text-[11px] text-slate-400">• {job.companyName}</span></h3>
+                  <p className="text-[11px] text-slate-400">{job.location || "Not specified"}</p>
                 </div>
 
-                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
-                  <strong>Required qualifications:</strong>{" "}
-                  {job.qualifications}
-                </div>
+                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap"><strong>Required qualifications:</strong> {job.qualifications}</div>
 
-                {job.description && (
-                  <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">
-                    {job.description}
-                  </div>
-                )}
+                {job.description && <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">{job.description}</div>}
 
-                <button
-                  onClick={() => handleApplyToJob(job._id)}
-                  className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
-                >
+                <button onClick={() => handleApplyToJob(job._id)} className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start">
                   Apply with this resume
                 </button>
 
-                {applyStatus[job._id] && (
-                  <p className="text-[11px] mt-1 text-emerald-300">
-                    {applyStatus[job._id]}
-                  </p>
-                )}
+                {applyStatus[job._id] && <p className="text-[11px] mt-1 text-emerald-300">{applyStatus[job._id]}</p>}
               </div>
             ))}
           </div>
