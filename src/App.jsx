@@ -1,43 +1,282 @@
 // src/App.jsx
-import React, { useState, useRef, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import React, { useEffect, useRef, useState, Suspense } from "react";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
 
-export default function App() {
+/* ------------------------
+   Config + auth helpers
+   ------------------------ */
+const API_BASE = import.meta.env.VITE_API_URL || "";
+const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
+
+function saveAuth(token, user) {
+  try {
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(user));
+  } catch {}
+}
+
+function clearAuth() {
+  try {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+  } catch {}
+}
+
+function getAuth() {
+  try {
+    const token = localStorage.getItem("token");
+    const raw = localStorage.getItem("user");
+    return { token, user: raw ? JSON.parse(raw) : null };
+  } catch {
+    return { token: null, user: null };
+  }
+}
+
+async function authFetch(input, opts = {}) {
+  const { token } = getAuth();
+  const headers = new Headers(opts.headers || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const merged = { ...opts, headers };
+  return fetch(input, merged);
+}
+
+/* ------------------------
+   Login / Register Pages
+   ------------------------ */
+
+function LoginPage({ onLogin }) {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => setErr(""), [email, password]);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Login failed");
+        setLoading(false);
+        return;
+      }
+
+      // Save token and user
+      saveAuth(data.token, data.user);
+      onLogin?.(data.user);
+
+      // Normalize role check and redirect accordingly
+      const role = (data.user?.role || "").toString().toLowerCase();
+      if (role === "recruiter") {
+        navigate("/recruiter-dashboard");
+      } else {
+        navigate("/");
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      setErr("Network error during login");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100 p-4">
+      <div className="w-full max-w-md bg-slate-800 border border-white/5 rounded-2xl p-6">
+        <h2 className="text-xl font-semibold mb-3">Login</h2>
+        {err && <div className="mb-2 text-xs text-rose-300">{err}</div>}
+        <form onSubmit={submit} className="space-y-3 text-sm">
+          <div>
+            <label className="text-xs text-slate-300">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-300">Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500"
+            >
+              {loading ? "Logging in..." : "Login"}
+            </button>
+            <Link to="/register" className="text-xs text-slate-300 ml-auto">
+              Create account
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function RegisterPage({ onLogin }) {
+  const navigate = useNavigate();
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("candidate");
+  const [company, setCompany] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => setErr(""), [fullName, email, password, role]);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/auth/register"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName, email, password, role, company }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Registration failed");
+        setLoading(false);
+        return;
+      }
+      saveAuth(data.token, data.user);
+      onLogin?.(data.user);
+
+      const r = (data.user?.role || "").toString().toLowerCase();
+      if (r === "recruiter") navigate("/recruiter-dashboard");
+      else navigate("/");
+    } catch (err) {
+      console.error("Register error:", err);
+      setErr("Network error during registration");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100 p-4">
+      <div className="w-full max-w-md bg-slate-800 border border-white/5 rounded-2xl p-6">
+        <h2 className="text-xl font-semibold mb-3">Register</h2>
+        {err && <div className="mb-2 text-xs text-rose-300">{err}</div>}
+        <form onSubmit={submit} className="space-y-3 text-sm">
+          <div>
+            <label className="text-xs text-slate-300">Full name</label>
+            <input
+              type="text"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Password</label>
+            <input
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Role</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            >
+              <option value="candidate">Candidate</option>
+              <option value="recruiter">Recruiter</option>
+            </select>
+          </div>
+
+          {role === "recruiter" && (
+            <div>
+              <label className="text-xs text-slate-300">Company name</label>
+              <input
+                type="text"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500"
+            >
+              {loading ? "Creating..." : "Create account"}
+            </button>
+            <Link to="/login" className="text-xs text-slate-300 ml-auto">
+              Already have an account?
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------
+   Home (analyzer + jobs) - your main UI
+   ------------------------ */
+
+function Home({ currentUser, setCurrentUser }) {
   const [fileName, setFileName] = useState("");
   const [parsedText, setParsedText] = useState("");
   const [keywords, setKeywords] = useState([]);
-  const [skillsFound, setSkillsFound] = useState([]);
-  const [topTokens, setTopTokens] = useState([]);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const [currentUser, setCurrentUser] = useState(null);
-
-  // Jobs for candidates
   const [jobs, setJobs] = useState([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobsError, setJobsError] = useState("");
-  const [applyStatus, setApplyStatus] = useState({}); // jobId -> message
+  const [applyStatus, setApplyStatus] = useState({});
 
   const fileRef = useRef(null);
   const navigate = useNavigate();
 
-  const API_BASE = import.meta.env.VITE_API_URL || "";
-  const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
-
-  // Load user from localStorage on mount
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("user");
-      if (raw) {
-        setCurrentUser(JSON.parse(raw));
-      }
-    } catch {
-      setCurrentUser(null);
-    }
-  }, []);
-
-  // Load jobs for candidates
   useEffect(() => {
     const loadJobs = async () => {
       try {
@@ -59,18 +298,9 @@ export default function App() {
     };
 
     loadJobs();
-  }, []); // run once
+  }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setCurrentUser(null);
-    navigate("/login");
-  };
-
-  // -----------------------------------------------------
-  // Analyze Resume with AI
-  // -----------------------------------------------------
+  // parse + analyze
   const analyzeResume = async () => {
     if (!fileRef.current?.files?.[0] && !parsedText) {
       setAnalysis({ error: "Please upload a file first." });
@@ -112,9 +342,6 @@ export default function App() {
     }
   };
 
-  // -----------------------------------------------------
-  // Upload + PARSE + Auto AI-Analyze
-  // -----------------------------------------------------
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -122,8 +349,6 @@ export default function App() {
     setFileName(file.name);
     setParsedText("");
     setKeywords([]);
-    setSkillsFound([]);
-    setTopTokens([]);
     setAnalysis(null);
 
     const formData = new FormData();
@@ -139,7 +364,6 @@ export default function App() {
       });
 
       const raw = await res.text();
-
       let data;
       try {
         data = JSON.parse(raw);
@@ -159,8 +383,6 @@ export default function App() {
 
       setParsedText(displayText);
       setKeywords(data.keywords || []);
-      setSkillsFound(data.skillsFound || []);
-      setTopTokens(data.topTokens || []);
     } catch (err) {
       console.error("Parse failed:", err);
       setParsedText(
@@ -170,7 +392,7 @@ export default function App() {
       setLoading(false);
     }
 
-    // 2) Automatically run AI analysis (even if parse was partial)
+    // 2) Automatically run AI analysis
     await analyzeResume();
   };
 
@@ -180,64 +402,49 @@ export default function App() {
       ? Math.min(100, Math.max(0, Number(atsScore)))
       : null;
 
-  // -----------------------------------------------------
-  // Candidate applies to a job
-  // -----------------------------------------------------
+  // Candidate applies to a job (with resume file if available)
   const handleApplyToJob = async (jobId) => {
-    if (!currentUser) {
+    const { token, user } = getAuth();
+    if (!user || user.role !== "candidate") {
       alert("Please login as a candidate to apply.");
       navigate("/login");
       return;
     }
 
-    if (currentUser.role !== "candidate") {
-      alert("Only candidate accounts can apply to jobs.");
-      return;
-    }
-
-    if (!parsedText && !fileRef.current?.files?.[0]) {
-      const confirmUpload = confirm(
-        "You have not uploaded/analyzed a resume in this session. Apply anyway?"
-      );
-      if (!confirmUpload) return;
-    }
-
     try {
-      const body = {
-        candidateName: currentUser.fullName,
-        candidateEmail: currentUser.email,
-        atsScore: atsDisplay ?? undefined,
-        notes: "Applied via AI Resume Analyzer",
-      };
+      setApplyStatus((s) => ({ ...s, [jobId]: "Applying..." }));
 
-      const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+      const formData = new FormData();
+      formData.append("candidateName", user.fullName);
+      formData.append("candidateEmail", user.email);
+      if (atsDisplay != null) formData.append("atsScore", String(atsDisplay));
+      formData.append("notes", "Applied via AI Resume Analyzer");
+
+      const file = fileRef.current?.files?.[0];
+      if (file) {
+        formData.append("file", file, file.name);
+      }
+
+      // use authFetch to include token
+      const res = await authFetch(apiUrl(`/api/jobs/${jobId}/apply`), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: formData,
       });
 
       const data = await res.json();
       if (!res.ok) {
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: data.error || "Failed to apply.",
-        }));
+        setApplyStatus((s) => ({ ...s, [jobId]: data.error || "Failed to apply." }));
         return;
       }
 
-      setApplyStatus((prev) => ({
-        ...prev,
-        [jobId]: "✅ Application submitted!",
-      }));
+      setApplyStatus((s) => ({ ...s, [jobId]: "✅ Application submitted!" }));
     } catch (err) {
       console.error("Apply error:", err);
-      setApplyStatus((prev) => ({
-        ...prev,
-        [jobId]: "Failed to apply. Please try again.",
-      }));
+      setApplyStatus((s) => ({ ...s, [jobId]: "Failed to apply. Please try again." }));
     }
   };
 
+  // UI:
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       {/* Background */}
@@ -300,7 +507,11 @@ export default function App() {
                   Hi, {currentUser.fullName.split(" ")[0]}
                 </span>
                 <button
-                  onClick={handleLogout}
+                  onClick={() => {
+                    clearAuth();
+                    setCurrentUser(null);
+                    navigate("/login");
+                  }}
                   className="px-3 py-1.5 rounded-lg border border-rose-500/70 text-rose-200 hover:bg-rose-500/10"
                 >
                   Logout
@@ -311,7 +522,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* MAIN */}
+      {/* MAIN - simplified: only the analyzer UI and job list */}
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-8 space-y-8">
         {/* Steps */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -330,7 +541,6 @@ export default function App() {
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* LEFT PANEL */}
           <div className="space-y-4">
-            {/* Upload */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h2 className="text-base font-semibold mb-3">Upload Resume</h2>
 
@@ -346,7 +556,7 @@ export default function App() {
                   {loading ? "Processing..." : "Click to upload"}
                 </span>
                 <span className="text-xs text-slate-400">
-                  PDF, DOCX, TXT • 15MB max
+                  PDF, DOCX, TXT • 20MB max
                 </span>
               </label>
 
@@ -355,31 +565,21 @@ export default function App() {
               </p>
             </div>
 
-            {/* Extracted text */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-              <h3 className="text-sm font-semibold mb-2">
-                Extracted Resume Text
-              </h3>
+              <h3 className="text-sm font-semibold mb-2">Extracted Resume Text</h3>
               <div className="h-56 overflow-y-auto bg-slate-950/60 border border-white/5 rounded-xl p-3 text-xs whitespace-pre-wrap">
                 {parsedText || "Upload a resume to extract text."}
               </div>
             </div>
 
-            {/* Keywords */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h3 className="text-sm font-semibold mb-2">Detected Keywords</h3>
-
               {keywords.length === 0 ? (
-                <p className="text-xs text-slate-400">
-                  Upload a resume to extract keywords.
-                </p>
+                <p className="text-xs text-slate-400">Upload a resume to extract keywords.</p>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {keywords.map((k, i) => (
-                    <span
-                      key={i}
-                      className="px-2 py-1 bg-indigo-500/15 border border-indigo-400/40 rounded-full text-[11px]"
-                    >
+                    <span key={i} className="px-2 py-1 bg-indigo-500/15 border border-indigo-400/40 rounded-full text-[11px]">
                       {k}
                     </span>
                   ))}
@@ -390,44 +590,28 @@ export default function App() {
 
           {/* RIGHT PANEL */}
           <div className="space-y-4">
-            {/* ATS Score */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
               <h3 className="text-sm font-semibold">ATS Score</h3>
               <div className="flex items-center gap-4 mt-3">
                 <div className="relative h-20 w-20 rounded-full bg-slate-900 border border-white/10 flex items-center justify-center">
                   <div className="absolute inset-[6px] rounded-full bg-gradient-to-br from-indigo-500 to-sky-500" />
                   <div className="absolute inset-[14px] rounded-full bg-slate-950 flex items-center justify-center">
-                    <span className="text-lg font-bold">
-                      {atsDisplay !== null ? atsDisplay : "--"}
-                    </span>
+                    <span className="text-lg font-bold">{atsDisplay !== null ? atsDisplay : "--"}</span>
                   </div>
                 </div>
-                <p className="text-xs text-slate-400">
-                  Higher ATS score increases your chance of passing filters.
-                </p>
+                <p className="text-xs text-slate-400">Higher ATS score increases chance of passing filters.</p>
               </div>
             </div>
 
-            {/* AI Feedback */}
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5">
-              <h3 className="text-sm font-semibold mb-2">
-                AI Feedback & Suggestions
-              </h3>
+              <h3 className="text-sm font-semibold mb-2">AI Feedback & Suggestions</h3>
 
-              {!analysis && (
-                <p className="text-xs text-slate-500">
-                  Upload a resume to see AI feedback.
-                </p>
-              )}
+              {!analysis && <p className="text-xs text-slate-500">Upload a resume to see AI feedback.</p>}
 
               {analysis?.error && (
                 <div className="text-xs bg-red-500/20 border border-red-500/40 p-3 rounded-lg text-red-200">
                   <strong>Error:</strong> {analysis.error}
-                  {analysis.details && (
-                    <div className="mt-1 text-[10px] opacity-80">
-                      {analysis.details}
-                    </div>
-                  )}
+                  {analysis.details && <div className="mt-1 text-[10px] opacity-80">{analysis.details}</div>}
                 </div>
               )}
 
@@ -438,12 +622,7 @@ export default function App() {
                       <h4 className="font-semibold mb-1">Top Skills</h4>
                       <div className="flex flex-wrap gap-1.5">
                         {analysis.topSkills.map((s, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-1 bg-emerald-500/20 rounded-full text-[11px]"
-                          >
-                            {s}
-                          </span>
+                          <span key={i} className="px-2 py-1 bg-emerald-500/20 rounded-full text-[11px]">{s}</span>
                         ))}
                       </div>
                     </div>
@@ -452,34 +631,19 @@ export default function App() {
                   {analysis.suggestions?.length > 0 && (
                     <div>
                       <h4 className="font-semibold mb-1">Suggestions</h4>
-                      <ul className="list-disc list-inside space-y-1">
-                        {analysis.suggestions.map((s, i) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ul>
+                      <ul className="list-disc list-inside space-y-1">{analysis.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>
                     </div>
                   )}
 
                   {analysis.rewrittenBullets?.length > 0 && (
                     <div>
-                      <h4 className="font-semibold mb-1">
-                        Improved Bullet Points
-                      </h4>
-                      <ul className="list-disc list-inside space-y-1">
-                        {analysis.rewrittenBullets.map((b, i) => (
-                          <li key={i}>{b}</li>
-                        ))}
-                      </ul>
+                      <h4 className="font-semibold mb-1">Improved Bullet Points</h4>
+                      <ul className="list-disc list-inside space-y-1">{analysis.rewrittenBullets.map((b, i) => <li key={i}>{b}</li>)}</ul>
                     </div>
                   )}
 
                   {analysis.raw && (
-                    <details className="mt-2 text-[10px] text-slate-400">
-                      <summary>Raw AI response</summary>
-                      <pre className="whitespace-pre-wrap mt-1">
-                        {analysis.raw}
-                      </pre>
-                    </details>
+                    <details className="mt-2 text-[10px] text-slate-400"><summary>Raw AI response</summary><pre className="whitespace-pre-wrap mt-1">{analysis.raw}</pre></details>
                   )}
                 </div>
               )}
@@ -491,66 +655,30 @@ export default function App() {
         <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">Open Positions</h2>
-            {jobsLoading && (
-              <span className="text-[11px] text-slate-400">
-                Loading jobs...
-              </span>
-            )}
+            {jobsLoading && <span className="text-[11px] text-slate-400">Loading jobs...</span>}
           </div>
 
-          {jobsError && (
-            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">
-              {jobsError}
-            </div>
-          )}
+          {jobsError && <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">{jobsError}</div>}
 
-          {jobs.length === 0 && !jobsLoading && !jobsError && (
-            <p className="text-xs text-slate-400">
-              No jobs posted yet. Check back later.
-            </p>
-          )}
+          {jobs.length === 0 && !jobsLoading && !jobsError && <p className="text-xs text-slate-400">No jobs posted yet. Check back later.</p>}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {jobs.map((job) => (
-              <div
-                key={job._id}
-                className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2"
-              >
+            {jobs.map(job => (
+              <div key={job._id} className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2">
                 <div>
-                  <h3 className="text-sm font-semibold">
-                    {job.title}{" "}
-                    <span className="text-[11px] text-slate-400">
-                      • {job.companyName}
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    {job.location || "Not specified"}
-                  </p>
+                  <h3 className="text-sm font-semibold">{job.title} <span className="text-[11px] text-slate-400">• {job.companyName}</span></h3>
+                  <p className="text-[11px] text-slate-400">{job.location || "Not specified"}</p>
                 </div>
 
-                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
-                  <strong>Required qualifications:</strong>{" "}
-                  {job.qualifications}
-                </div>
+                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap"><strong>Required qualifications:</strong> {job.qualifications}</div>
 
-                {job.description && (
-                  <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">
-                    {job.description}
-                  </div>
-                )}
+                {job.description && <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">{job.description}</div>}
 
-                <button
-                  onClick={() => handleApplyToJob(job._id)}
-                  className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
-                >
+                <button onClick={() => handleApplyToJob(job._id)} className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start">
                   Apply with this resume
                 </button>
 
-                {applyStatus[job._id] && (
-                  <p className="text-[11px] mt-1 text-emerald-300">
-                    {applyStatus[job._id]}
-                  </p>
-                )}
+                {applyStatus[job._id] && <p className="text-[11px] mt-1 text-emerald-300">{applyStatus[job._id]}</p>}
               </div>
             ))}
           </div>
@@ -561,5 +689,46 @@ export default function App() {
         © {new Date().getFullYear()} AI Resume Analyzer • Built with React + Express + MongoDB
       </footer>
     </div>
+  );
+}
+
+/* ------------------------
+   Router wrapper (default export)
+   ------------------------ */
+
+export default function AppRouterWrapper() {
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (raw) {
+      try {
+        setCurrentUser(JSON.parse(raw));
+      } catch {}
+    }
+  }, []);
+
+  const onLogin = (user) => {
+    setCurrentUser(user);
+  };
+
+  const RecruiterDashboardLazy = React.lazy(() =>
+    import("./RecruiterDashboard.jsx").catch(() => ({ default: () => <div className="p-6">Recruiter dashboard not available.</div> }))
+  );
+
+  return (
+    <Routes>
+      <Route path="/" element={<Home currentUser={currentUser} setCurrentUser={setCurrentUser} />} />
+      <Route path="/login" element={<LoginPage onLogin={onLogin} />} />
+      <Route path="/register" element={<RegisterPage onLogin={onLogin} />} />
+      <Route
+        path="/recruiter-dashboard"
+        element={
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading dashboard...</div>}>
+            <RecruiterDashboardLazy />
+          </Suspense>
+        }
+      />
+    </Routes>
   );
 }
