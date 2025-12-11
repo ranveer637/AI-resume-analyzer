@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, Suspense } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -8,9 +8,9 @@ import {
   useNavigate,
 } from "react-router-dom";
 
-/* -------------------------
-  Helpers: auth storage + fetch
-   ------------------------- */
+/* ============================
+   Utilities: API + Auth helpers
+   ============================ */
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -20,13 +20,17 @@ function apiUrl(path) {
 }
 
 function saveAuth(token, user) {
-  localStorage.setItem("token", token);
-  localStorage.setItem("user", JSON.stringify(user));
+  try {
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(user));
+  } catch {}
 }
 
 function clearAuth() {
-  localStorage.removeItem("token");
-  localStorage.removeItem("user");
+  try {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+  } catch {}
 }
 
 function getAuth() {
@@ -41,16 +45,40 @@ function getAuth() {
 }
 
 async function authFetch(input, opts = {}) {
-  const { token } = getAuth();
-  const headers = new Headers(opts.headers || {});
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const merged = { ...opts, headers };
-  return fetch(input, merged);
+  try {
+    const { token } = getAuth();
+    const headers = new Headers(opts.headers || {});
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const merged = { ...opts, headers };
+    return fetch(input, merged);
+  } catch (err) {
+    // Fallback to normal fetch if something goes wrong
+    return fetch(input, opts);
+  }
 }
 
-/* -------------------------
-  Login / Register components
-   ------------------------- */
+/* ============================
+   Small Error Overlay (helps debug white screens)
+   ============================ */
+
+function ErrorOverlay({ error }) {
+  if (!error) return null;
+  return (
+    <div style={{
+      position: "fixed", zIndex: 9999, left: 12, right: 12, top: 12,
+      background: "rgba(0,0,0,0.85)", color: "white", padding: 12, borderRadius: 8,
+      fontSize: 13, boxShadow: "0 8px 30px rgba(0,0,0,0.6)"
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>App error</div>
+      <pre style={{ whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto" }}>{String(error)}</pre>
+    </div>
+  );
+}
+
+/* ============================
+   Pages: Login / Register / Home
+   (full implementations)
+   ============================ */
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -252,9 +280,9 @@ function RegisterPage() {
   );
 }
 
-/* -------------------------
-  Home: Analyzer + Jobs (candidate)
-   ------------------------- */
+/* ============================
+   Home page: Analyzer + Jobs (full)
+   ============================ */
 
 function Home() {
   const [fileName, setFileName] = useState("");
@@ -448,11 +476,96 @@ function Home() {
       </header>
 
       <main className="max-w-6xl mx-auto p-4 space-y-6">
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">...</section>
-        {/* The rest of the Home UI remains the same as previous full file. 
-            For brevity here I used "..." but you should keep the full JSX from your working App.
-            If you prefer, I can paste the full Home JSX (again) — tell me and I'll include it verbatim.
-        */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="rounded-2xl bg-slate-900/60 p-4 border border-white/5">
+            <h3 className="text-base font-semibold mb-3">Upload resume</h3>
+
+            <label className="block border-dashed border-2 border-slate-700 p-6 rounded-lg cursor-pointer text-center">
+              <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" onChange={handleFileChange} className="hidden" />
+              <div>{loading ? "Processing..." : "Click to upload a resume"}</div>
+              <div className="text-xs text-slate-400 mt-2">PDF / DOCX / TXT — 20MB max</div>
+            </label>
+
+            <div className="mt-3 text-xs">
+              Selected: <strong>{fileName || "None"}</strong>
+            </div>
+
+            <div className="mt-3">
+              <button onClick={analyzeResume} className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500">Analyze now</button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900/60 p-4 border border-white/5">
+            <h3 className="text-base font-semibold mb-3">ATS Score & Feedback</h3>
+
+            <div className="mb-3">
+              <div className="text-xs text-slate-400">ATS Score</div>
+              <div className="text-2xl font-bold">{atsDisplay != null ? atsDisplay : "--"}</div>
+            </div>
+
+            <div>
+              <div className="text-xs text-slate-400">Detected keywords</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {keywords.length === 0 ? <div className="text-xs text-slate-500">No keywords detected yet</div> : keywords.map((k, i) => <span key={i} className="px-2 py-1 rounded-full bg-indigo-600/20 text-xs">{k}</span>)}
+              </div>
+            </div>
+
+            <div className="mt-4 text-xs">
+              <div className="font-semibold">AI Suggestions</div>
+              {!analysis && <div className="text-slate-400 mt-2">Upload & analyze to see suggestions</div>}
+              {analysis?.error && <div className="text-rose-300 mt-2 text-xs">{analysis.error}</div>}
+              {analysis && !analysis.error && (
+                <div className="mt-2 space-y-2 text-sm">
+                  {analysis.topSkills && analysis.topSkills.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold">Top skills</div>
+                      <div className="flex flex-wrap gap-2 mt-1">{analysis.topSkills.map((s, i) => <span key={i} className="px-2 py-1 rounded bg-emerald-600/20 text-xs">{s}</span>)}</div>
+                    </div>
+                  )}
+                  {analysis.suggestions && analysis.suggestions.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold">Suggestions</div>
+                      <ul className="list-disc list-inside text-xs mt-1">{analysis.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl bg-slate-900/60 p-4 border border-white/5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold">Open job positions</h3>
+            {jobsLoading && <div className="text-xs text-slate-400">Loading...</div>}
+          </div>
+
+          {jobsError && <div className="text-xs text-rose-300 mt-2">{jobsError}</div>}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+            {jobs.map((job) => (
+              <div key={job._id} className="p-3 rounded-lg bg-slate-950/50 border border-white/5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">{job.title}</div>
+                    <div className="text-xs text-slate-400">{job.companyName} • {job.location || "Not specified"}</div>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {new Date(job.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-300 mt-2 line-clamp-3">{job.qualifications}</div>
+                {job.description && <div className="text-xs text-slate-400 mt-1 line-clamp-3">{job.description}</div>}
+
+                <div className="mt-3 flex items-center gap-2">
+                  <button onClick={() => handleApplyToJob(job._id)} className="px-3 py-1.5 rounded bg-indigo-600 text-sm">Apply with resume</button>
+                  <div className="text-xs text-emerald-300">{applyStatus[job._id]}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       </main>
 
       <footer className="text-center py-4 text-xs text-slate-500">© {new Date().getFullYear()} AI Resume Analyzer</footer>
@@ -460,30 +573,58 @@ function Home() {
   );
 }
 
-/* -------------------------
-  Top-level App component (default export)
-   ------------------------- */
+/* ============================
+   Lazy-load recruiter dashboard (safe)
+   ============================ */
 
-export default function App() {
+const RecruiterDashboardLazy = React.lazy(() =>
+  import("./RecruiterDashboard.jsx").catch((err) => {
+    // propagate error so Suspense fallback + overlay shows it
+    throw err;
+  })
+);
+
+/* ============================
+   Root App (default export)
+   ============================ */
+
+export default function AppWrapper() {
+  // error overlay state
+  const [appError, setAppError] = useState(null);
+
+  // global error boundary-ish
+  useEffect(() => {
+    function onError(e) {
+      setAppError(e?.error || e?.message || String(e));
+    }
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", (ev) => onError(ev?.reason || ev));
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", (ev) => onError(ev?.reason || ev));
+    };
+  }, []);
+
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        {/* Recruiter dashboard is provided as a separate file; route to it if present */}
-        <Route
-          path="/recruiter-dashboard"
-          element={
-            // lazy-import to avoid breaking if file missing
-            React.createElement(
-              React.lazy
-                ? React.lazy(() => import("./RecruiterDashboard.jsx"))
-                : () => <div className="p-6">Recruiter Dashboard not available.</div>
-            )
-          }
-        />
-      </Routes>
-    </Router>
+    <>
+      <ErrorOverlay error={appError} />
+      <Router>
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route
+              path="/recruiter-dashboard"
+              element={
+                <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading dashboard...</div>}>
+                  <RecruiterDashboardLazy />
+                </Suspense>
+              }
+            />
+          </Routes>
+        </Suspense>
+      </Router>
+    </>
   );
 }
