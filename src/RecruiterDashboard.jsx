@@ -1,16 +1,13 @@
-// src/RecruiterDashboard.jsx
 import React, { useEffect, useState, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-/**
- * Recruiter Dashboard
- * - Uses authFetch which reads token from localStorage ("token")
- * - Displays recruiter's jobs (auth required)
- * - Post a new job
- * - View each application's resume inline by fetching the file as a blob (auth needed)
- */
+// RecruiterDashboard.jsx
+// - Uses authFetch (reads token from localStorage)
+// - Lists jobs posted by the recruiter
+// - Allows posting new jobs (includes recruiterEmail automatically)
+// - Shows applications per job and lets recruiter view/download resume blobs inline
+// - Tailwind classes used to match the rest of the app
 
-// API base (set VITE_API_URL in environment if your API is on another host)
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
 
@@ -35,14 +32,13 @@ async function authFetch(input, opts = {}) {
 
 export default function RecruiterDashboard() {
   const navigate = useNavigate();
-
   const [user, setUser] = useState(null);
 
   const [jobs, setJobs] = useState([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobsError, setJobsError] = useState("");
 
-  // new job form
+  // Create job form state
   const [title, setTitle] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [location, setLocation] = useState("");
@@ -51,44 +47,43 @@ export default function RecruiterDashboard() {
   const [creating, setCreating] = useState(false);
   const [createMsg, setCreateMsg] = useState("");
 
-  // resume modal
+  // Resume modal state
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalUrl, setModalUrl] = useState("");
   const [modalFilename, setModalFilename] = useState("");
-  const [modalBlobUrl, setModalBlobUrl] = useState("");
   const [loadingResume, setLoadingResume] = useState(false);
-
-  const blobUrlRef = useRef(null);
+  const blobRef = useRef(null);
 
   useEffect(() => {
-    // check auth
-    const r = getAuth();
-    if (!r.user || !r.token) {
-      navigate("/login");
+    const a = getAuth();
+    if (!a.user || !a.token) {
+      // redirect to login if not authenticated
+      navigate('/login');
       return;
     }
-    setUser(r.user);
-    // prefer recruiter company name default
-    if (r.user.company) setCompanyName(r.user.company);
+    setUser(a.user);
+    // prefill company name if available
+    if (a.user.company) setCompanyName(a.user.company);
     loadJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // load jobs posted by this recruiter
   const loadJobs = async () => {
     setLoadingJobs(true);
     setJobsError("");
     try {
-      const res = await authFetch(apiUrl("/api/recruiter/jobs"));
+      const res = await authFetch(apiUrl('/api/recruiter/jobs'));
       const data = await res.json();
       if (!res.ok) {
-        setJobsError(data.error || "Failed to load jobs");
+        setJobsError(data.error || 'Failed to load jobs');
         setJobs([]);
         return;
       }
       setJobs(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error("loadJobs error:", err);
-      setJobsError("Network error while loading jobs");
+      console.error('loadJobs error', err);
+      setJobsError('Network error while loading jobs');
+      setJobs([]);
     } finally {
       setLoadingJobs(false);
     }
@@ -98,68 +93,66 @@ export default function RecruiterDashboard() {
     e?.preventDefault();
     setCreateMsg("");
     if (!title || !companyName || !qualifications) {
-      setCreateMsg("Title, company and qualifications are required.");
+      setCreateMsg('Title, company and qualifications are required.');
       return;
     }
+
+    // recruiter email from logged user (server should verify from token)
+    const recruiterEmail = user?.email || '';
+    if (!recruiterEmail) {
+      setCreateMsg('Recruiter email not found. Please login again.');
+      return;
+    }
+
     setCreating(true);
     try {
-      const res = await authFetch(apiUrl("/api/recruiter/jobs"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, companyName, location, qualifications, description }),
+      const payload = { title, companyName, location, qualifications, description, recruiterEmail };
+      const res = await authFetch(apiUrl('/api/recruiter/jobs'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
+
       const data = await res.json();
       if (!res.ok) {
-        setCreateMsg(data.error || "Failed to create job");
+        setCreateMsg(data.error || 'Failed to create job');
         return;
       }
-      setCreateMsg("✅ Job posted");
-      setTitle("");
-      setLocation("");
-      setQualifications("");
-      setDescription("");
-      // reload jobs
+
+      setCreateMsg('✅ Job posted');
+      setTitle(''); setLocation(''); setQualifications(''); setDescription('');
+      // reload
       await loadJobs();
     } catch (err) {
-      console.error("create job error:", err);
-      setCreateMsg("Network error while creating job");
+      console.error('create job error', err);
+      setCreateMsg('Network error while creating job');
     } finally {
       setCreating(false);
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    window.location.href = "/login";
-  };
-
-  // fetch resume as blob, create blob URL and show modal
-  const openResume = async (appId, filename) => {
-    if (!appId) return alert("Missing application id");
+  // Open resume blob inline
+  const openResume = async (applicationId, filename) => {
+    if (!applicationId) return alert('Missing application id');
     setLoadingResume(true);
     try {
-      const res = await authFetch(apiUrl(`/api/applications/${appId}/resume`));
+      const res = await authFetch(apiUrl(`/api/applications/${applicationId}/resume`));
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || "Failed to fetch resume");
+        const text = await res.text();
+        throw new Error(text || 'Failed to fetch resume');
       }
-      const arrayBuffer = await res.arrayBuffer();
-      const contentType = res.headers.get("content-type") || "application/pdf";
-      const blob = new Blob([arrayBuffer], { type: contentType });
-      // revoke previous blob if any
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      blobUrlRef.current = blobUrl;
-      setModalBlobUrl(blobUrl);
-      setModalFilename(filename || "resume.pdf");
+      const contentType = res.headers.get('content-type') || 'application/pdf';
+      const buffer = await res.arrayBuffer();
+      const blob = new Blob([buffer], { type: contentType });
+      if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+      const url = URL.createObjectURL(blob);
+      blobRef.current = url;
+      setModalUrl(url);
+      setModalFilename(filename || 'resume.pdf');
       setModalOpen(true);
     } catch (err) {
-      console.error("openResume error:", err);
-      alert("Failed to load resume: " + (err?.message || ""));
+      console.error('openResume error', err);
+      alert('Failed to load resume: ' + (err?.message || ''));
     } finally {
       setLoadingResume(false);
     }
@@ -167,24 +160,19 @@ export default function RecruiterDashboard() {
 
   const closeModal = () => {
     setModalOpen(false);
-    setModalFilename("");
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
-      blobUrlRef.current = null;
+    setModalFilename('');
+    if (blobRef.current) {
+      URL.revokeObjectURL(blobRef.current);
+      blobRef.current = null;
     }
-    setModalBlobUrl("");
+    setModalUrl('');
   };
 
-  const openInNewTab = () => {
-    if (!modalBlobUrl) return;
-    window.open(modalBlobUrl, "_blank");
-  };
-
-  const downloadResume = () => {
-    if (!modalBlobUrl) return;
-    const a = document.createElement("a");
-    a.href = modalBlobUrl;
-    a.download = modalFilename || "resume.pdf";
+  const downloadModal = () => {
+    if (!modalUrl) return;
+    const a = document.createElement('a');
+    a.href = modalUrl;
+    a.download = modalFilename || 'resume.pdf';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -192,27 +180,25 @@ export default function RecruiterDashboard() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* header */}
       <header className="border-b border-white/10 bg-slate-950/70">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-xl bg-emerald-500 flex items-center justify-center font-bold">HR</div>
             <div>
               <h1 className="text-lg font-semibold">Recruiter Dashboard</h1>
-              <p className="text-xs text-slate-400">Post jobs • Review applicants</p>
+              <p className="text-xs text-slate-400">Manage jobs & review applicants</p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
             <Link to="/" className="px-3 py-1 rounded-lg border border-white/10 text-xs">Analyzer</Link>
             <div className="text-xs text-slate-300">{user?.company || user?.fullName}</div>
-            <button onClick={logout} className="px-3 py-1 rounded-lg border border-rose-500/70 text-rose-200">Logout</button>
+            <button onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); window.location.href = '/login'; }} className="px-3 py-1 rounded-lg border border-rose-500/70 text-rose-200">Logout</button>
           </div>
         </div>
       </header>
 
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-6 space-y-6">
-        {/* top summary + form */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="rounded-2xl bg-slate-900/70 p-4 border border-white/10">
             <div className="text-xs text-slate-400">Your Jobs</div>
@@ -222,9 +208,7 @@ export default function RecruiterDashboard() {
 
           <div className="rounded-2xl bg-slate-900/70 p-4 border border-white/10">
             <div className="text-xs text-slate-400">Total applications</div>
-            <div className="text-2xl font-semibold mt-1">
-              {jobs.reduce((s, j) => s + (j.applications?.length || 0), 0)}
-            </div>
+            <div className="text-2xl font-semibold mt-1">{jobs.reduce((s, j) => s + (j.applications?.length || 0), 0)}</div>
             <div className="text-xs text-slate-500 mt-1">Across all roles</div>
           </div>
 
@@ -235,8 +219,7 @@ export default function RecruiterDashboard() {
           </div>
         </section>
 
-        {/* create job */}
-        <section className="rounded-2xl bg-slate-900/80 p-4 border border-white/10">
+        <section className="rounded-2xl bg-slate-900/70 p-4 border border-white/10">
           <h2 className="text-sm font-semibold mb-2">Post a new job</h2>
           {createMsg && <div className="text-xs mb-2">{createMsg}</div>}
           <form onSubmit={handleCreateJob} className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -246,15 +229,12 @@ export default function RecruiterDashboard() {
             <input value={qualifications} onChange={(e) => setQualifications(e.target.value)} placeholder="Required qualifications (short)" className="bg-slate-950 p-2 rounded border border-slate-700 text-sm" />
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" rows={3} className="md:col-span-2 bg-slate-950 p-2 rounded border border-slate-700 text-sm" />
             <div className="md:col-span-2 flex gap-2">
-              <button type="submit" disabled={creating} className="px-3 py-2 rounded bg-emerald-500 hover:bg-emerald-400">
-                {creating ? "Posting..." : "Post job"}
-              </button>
-              <button type="button" onClick={() => { setTitle(""); setLocation(""); setQualifications(""); setDescription(""); }} className="px-3 py-2 rounded border">Clear</button>
+              <button type="submit" disabled={creating} className="px-3 py-2 rounded bg-emerald-500 hover:bg-emerald-400">{creating ? 'Posting...' : 'Post job'}</button>
+              <button type="button" onClick={() => { setTitle(''); setLocation(''); setQualifications(''); setDescription(''); }} className="px-3 py-2 rounded border">Clear</button>
             </div>
           </form>
         </section>
 
-        {/* job list with applications */}
         <section className="space-y-4">
           {loadingJobs && <div className="text-xs text-slate-400">Loading jobs...</div>}
           {jobsError && <div className="text-xs text-rose-300">{jobsError}</div>}
@@ -265,7 +245,7 @@ export default function RecruiterDashboard() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold">{job.title}</div>
-                    <div className="text-xs text-slate-400">{job.companyName} • {job.location || "Not specified"}</div>
+                    <div className="text-xs text-slate-400">{job.companyName} • {job.location || 'Not specified'}</div>
                     <div className="text-xs text-slate-300 mt-2 line-clamp-3">{job.qualifications}</div>
                   </div>
 
@@ -275,7 +255,6 @@ export default function RecruiterDashboard() {
                   </div>
                 </div>
 
-                {/* Applications */}
                 {job.applications && job.applications.length > 0 ? (
                   <div className="mt-3 space-y-2">
                     {job.applications.map((app) => (
@@ -286,42 +265,28 @@ export default function RecruiterDashboard() {
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <div className="text-xs text-slate-400 mr-2">
-                            {app.atsScore != null ? `ATS: ${app.atsScore}/100` : "ATS: N/A"}
-                          </div>
+                          <div className="text-xs text-slate-400 mr-2">{app.atsScore != null ? `ATS: ${app.atsScore}/100` : 'ATS: N/A'}</div>
 
                           {app.resumePath ? (
                             <>
-                              <button
-                                onClick={() => openResume(app._id, app.resumeFilename)}
-                                className="px-2 py-1 rounded bg-indigo-600 text-xs"
-                              >
-                                {loadingResume ? "Loading..." : "View Resume"}
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  // fetch blob & open in new tab
-                                  try {
-                                    const res = await authFetch(apiUrl(`/api/applications/${app._id}/resume`));
-                                    if (!res.ok) {
-                                      const txt = await res.text();
-                                      throw new Error(txt || "Failed to fetch");
-                                    }
-                                    const arrayBuffer = await res.arrayBuffer();
-                                    const blob = new Blob([arrayBuffer], { type: res.headers.get("content-type") || "application/pdf" });
-                                    const url = URL.createObjectURL(blob);
-                                    window.open(url, "_blank");
-                                    // revoke after short delay so tab can load
-                                    setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
-                                  } catch (err) {
-                                    console.error("open new tab error:", err);
-                                    alert("Could not open resume: " + (err?.message || ""));
+                              <button onClick={() => openResume(app._id, app.resumeFilename)} className="px-2 py-1 rounded bg-indigo-600 text-xs">{loadingResume ? 'Loading...' : 'View Resume'}</button>
+                              <button onClick={async () => {
+                                try {
+                                  const res = await authFetch(apiUrl(`/api/applications/${app._id}/resume`));
+                                  if (!res.ok) {
+                                    const txt = await res.text();
+                                    throw new Error(txt || 'Failed to fetch');
                                   }
-                                }}
-                                className="px-2 py-1 rounded border text-xs"
-                              >
-                                Open new tab
-                              </button>
+                                  const buf = await res.arrayBuffer();
+                                  const blob = new Blob([buf], { type: res.headers.get('content-type') || 'application/pdf' });
+                                  const url = URL.createObjectURL(blob);
+                                  window.open(url, '_blank');
+                                  setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+                                } catch (err) {
+                                  console.error('open new tab error:', err);
+                                  alert('Could not open resume: ' + (err?.message || ''));
+                                }
+                              }} className="px-2 py-1 rounded border text-xs">Open new tab</button>
                             </>
                           ) : (
                             <div className="text-xs text-slate-500">No resume</div>
@@ -347,8 +312,8 @@ export default function RecruiterDashboard() {
             <div className="flex items-center justify-between p-3 border-b border-white/5">
               <div className="text-sm font-medium">{modalFilename}</div>
               <div className="flex items-center gap-2">
-                <button onClick={downloadResume} className="px-2 py-1 text-xs border rounded">Download</button>
-                <button onClick={openInNewTab} className="px-2 py-1 text-xs border rounded">Open</button>
+                <button onClick={downloadModal} className="px-2 py-1 text-xs border rounded">Download</button>
+                <button onClick={() => window.open(modalUrl, '_blank')} className="px-2 py-1 text-xs border rounded">Open</button>
                 <button onClick={closeModal} className="px-2 py-1 text-xs border rounded">Close</button>
               </div>
             </div>
@@ -357,16 +322,14 @@ export default function RecruiterDashboard() {
               {loadingResume ? (
                 <div className="h-full flex items-center justify-center">Loading...</div>
               ) : (
-                <iframe src={modalBlobUrl} title="Resume" className="w-full h-full" />
+                <iframe src={modalUrl} title="Resume" className="w-full h-full" />
               )}
             </div>
           </div>
         </div>
       )}
 
-      <footer className="border-t border-white/10 text-center text-xs text-slate-500 py-3">
-        © {new Date().getFullYear()} AI Resume Analyzer
-      </footer>
+      <footer className="border-t border-white/10 text-center text-xs text-slate-500 py-3">© {new Date().getFullYear()} AI Resume Analyzer</footer>
     </div>
   );
 }
