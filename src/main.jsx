@@ -1,38 +1,20 @@
 // src/main.jsx
 import React from "react";
-import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { createRoot } from "react-dom/client";
+import App from "./App";         // <-- Default export from App.jsx
+import "./index.css";            // Tailwind / global styles
 
-import "./index.css";
-import App from "./App";
-import Login from "./Login";
-import Register from "./Register";
-import RecruiterDashboard from "./RecruiterDashboard";
-
-function Root() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        {/* Main resume analyzer */}
-        <Route path="/" element={<App />} />
-        <Route path="/analyzer" element={<App />} />
-
-        {/* Auth */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-
-        {/* Hiring manager / admin dashboard */}
-        <Route path="/recruiter-dashboard" element={<RecruiterDashboard />} />
-
-        {/* Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+// Ensure the root element exists
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error(
+    'Root element "#root" not found. Check public/index.html or index.html.'
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(
+// React 18 root API
+createRoot(rootElement).render(
   <React.StrictMode>
-    <Root />
+    <App />
   </React.StrictMode>
 );
