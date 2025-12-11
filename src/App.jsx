@@ -1,36 +1,267 @@
 // src/App.jsx
-import React, { useState, useRef, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import React, { useEffect, useRef, useState, Suspense } from "react";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
 
-export default function App() {
+/* ---------------------
+   Config + helpers
+   --------------------- */
+const API_BASE = import.meta.env.VITE_API_URL || "";
+const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
+
+function saveAuth(token, user) {
+  try {
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(user));
+  } catch {}
+}
+
+function clearAuth() {
+  try {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+  } catch {}
+}
+
+function getAuth() {
+  try {
+    const token = localStorage.getItem("token");
+    const raw = localStorage.getItem("user");
+    return { token, user: raw ? JSON.parse(raw) : null };
+  } catch {
+    return { token: null, user: null };
+  }
+}
+
+async function authFetch(input, opts = {}) {
+  const { token } = getAuth();
+  const headers = new Headers(opts.headers || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const merged = { ...opts, headers };
+  return fetch(input, merged);
+}
+
+/* ---------------------
+   Login / Register
+   --------------------- */
+function LoginPage({ onLogin }) {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => setErr(""), [email, password]);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/auth/login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Login failed");
+        setLoading(false);
+        return;
+      }
+      saveAuth(data.token, data.user);
+      onLogin(data.user);
+      navigate("/");
+    } catch (err) {
+      console.error("Login error:", err);
+      setErr("Network error during login");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100 p-4">
+      <div className="w-full max-w-md bg-slate-800 border border-white/5 rounded-2xl p-6">
+        <h2 className="text-xl font-semibold mb-3">Login</h2>
+        {err && <div className="mb-2 text-xs text-rose-300">{err}</div>}
+        <form onSubmit={submit} className="space-y-3 text-sm">
+          <div>
+            <label className="text-xs text-slate-300">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-300">Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500"
+            >
+              {loading ? "Logging in..." : "Login"}
+            </button>
+            <Link to="/register" className="text-xs text-slate-300 ml-auto">
+              Create account
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function RegisterPage({ onLogin }) {
+  const navigate = useNavigate();
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("candidate");
+  const [company, setCompany] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => setErr(""), [fullName, email, password, role]);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/auth/register"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName, email, password, role, company }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Registration failed");
+        setLoading(false);
+        return;
+      }
+      saveAuth(data.token, data.user);
+      onLogin(data.user);
+      navigate("/");
+    } catch (err) {
+      console.error("Register error:", err);
+      setErr("Network error during registration");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-100 p-4">
+      <div className="w-full max-w-md bg-slate-800 border border-white/5 rounded-2xl p-6">
+        <h2 className="text-xl font-semibold mb-3">Register</h2>
+        {err && <div className="mb-2 text-xs text-rose-300">{err}</div>}
+        <form onSubmit={submit} className="space-y-3 text-sm">
+          <div>
+            <label className="text-xs text-slate-300">Full name</label>
+            <input
+              type="text"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Password</label>
+            <input
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-300">Role</label>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+            >
+              <option value="candidate">Candidate</option>
+              <option value="recruiter">Recruiter</option>
+            </select>
+          </div>
+
+          {role === "recruiter" && (
+            <div>
+              <label className="text-xs text-slate-300">Company name</label>
+              <input
+                type="text"
+                value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                className="mt-1 w-full rounded-md bg-slate-900 p-2 text-sm outline-none border border-slate-700"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500"
+            >
+              {loading ? "Creating..." : "Create account"}
+            </button>
+            <Link to="/login" className="text-xs text-slate-300 ml-auto">
+              Already have an account?
+            </Link>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------
+   Home (your original UI)
+   --------------------- */
+function Home({ currentUser, setCurrentUser }) {
   const [fileName, setFileName] = useState("");
   const [parsedText, setParsedText] = useState("");
   const [keywords, setKeywords] = useState([]);
-  const [skillsFound, setSkillsFound] = useState([]);
-  const [topTokens, setTopTokens] = useState([]);
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const [currentUser, setCurrentUser] = useState(null);
-
-  // Jobs for candidates
   const [jobs, setJobs] = useState([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobsError, setJobsError] = useState("");
-  const [applyStatus, setApplyStatus] = useState({}); // jobId -> message
+  const [applyStatus, setApplyStatus] = useState({});
 
   const fileRef = useRef(null);
   const navigate = useNavigate();
-
-  const API_BASE = import.meta.env.VITE_API_URL || "";
-  const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("user");
-      if (raw) setCurrentUser(JSON.parse(raw));
-    } catch {}
-  }, []);
 
   useEffect(() => {
     const loadJobs = async () => {
@@ -55,14 +286,7 @@ export default function App() {
     loadJobs();
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setCurrentUser(null);
-    navigate("/login");
-  };
-
-  // Analyze Resume
+  // parse + analyze functions (same as your prior code)
   const analyzeResume = async () => {
     if (!fileRef.current?.files?.[0] && !parsedText) {
       setAnalysis({ error: "Please upload a file first." });
@@ -104,7 +328,6 @@ export default function App() {
     }
   };
 
-  // Upload + PARSE + Auto AI-Analyze
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -112,8 +335,6 @@ export default function App() {
     setFileName(file.name);
     setParsedText("");
     setKeywords([]);
-    setSkillsFound([]);
-    setTopTokens([]);
     setAnalysis(null);
 
     const formData = new FormData();
@@ -148,8 +369,6 @@ export default function App() {
 
       setParsedText(displayText);
       setKeywords(data.keywords || []);
-      setSkillsFound(data.skillsFound || []);
-      setTopTokens(data.topTokens || []);
     } catch (err) {
       console.error("Parse failed:", err);
       setParsedText(
@@ -171,14 +390,10 @@ export default function App() {
 
   // Candidate applies to a job (with resume file if available)
   const handleApplyToJob = async (jobId) => {
-    if (!currentUser) {
+    const { token, user } = getAuth();
+    if (!user || user.role !== "candidate") {
       alert("Please login as a candidate to apply.");
       navigate("/login");
-      return;
-    }
-
-    if (currentUser.role !== "candidate") {
-      alert("Only candidate accounts can apply.");
       return;
     }
 
@@ -186,8 +401,8 @@ export default function App() {
       setApplyStatus((s) => ({ ...s, [jobId]: "Applying..." }));
 
       const formData = new FormData();
-      formData.append("candidateName", currentUser.fullName);
-      formData.append("candidateEmail", currentUser.email);
+      formData.append("candidateName", user.fullName);
+      formData.append("candidateEmail", user.email);
       if (atsDisplay != null) formData.append("atsScore", String(atsDisplay));
       formData.append("notes", "Applied via AI Resume Analyzer");
 
@@ -196,7 +411,8 @@ export default function App() {
         formData.append("file", file, file.name);
       }
 
-      const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+      // use authFetch to include token
+      const res = await authFetch(apiUrl(`/api/jobs/${jobId}/apply`), {
         method: "POST",
         body: formData,
       });
@@ -276,7 +492,11 @@ export default function App() {
                   Hi, {currentUser.fullName.split(" ")[0]}
                 </span>
                 <button
-                  onClick={handleLogout}
+                  onClick={() => {
+                    clearAuth();
+                    setCurrentUser(null);
+                    navigate("/login");
+                  }}
                   className="px-3 py-1.5 rounded-lg border border-rose-500/70 text-rose-200 hover:bg-rose-500/10"
                 >
                   Logout
@@ -287,7 +507,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* MAIN */}
+      {/* MAIN - simplified: only the analyzer UI and job list */}
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-8 space-y-8">
         {/* Steps */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -454,5 +674,39 @@ export default function App() {
         © {new Date().getFullYear()} AI Resume Analyzer • Built with React + Express + MongoDB
       </footer>
     </div>
+  );
+}
+
+/* ---------------------
+   App root wrapper: routing
+   --------------------- */
+
+export default function AppRouterWrapper() {
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (raw) {
+      try { setCurrentUser(JSON.parse(raw)); } catch {}
+    }
+  }, []);
+
+  const onLogin = (user) => {
+    setCurrentUser(user);
+  };
+
+  const RecruiterDashboardLazy = React.lazy(() => import("./RecruiterDashboard.jsx").catch(() => ({ default: () => <div className="p-6">Recruiter dashboard not available.</div> })));
+
+  return (
+    <Routes>
+      <Route path="/" element={<Home currentUser={currentUser} setCurrentUser={setCurrentUser} />} />
+      <Route path="/login" element={<LoginPage onLogin={onLogin} />} />
+      <Route path="/register" element={<RegisterPage onLogin={onLogin} />} />
+      <Route path="/recruiter-dashboard" element={
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading dashboard...</div>}>
+          <RecruiterDashboardLazy />
+        </Suspense>
+      } />
+    </Routes>
   );
 }
