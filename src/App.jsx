@@ -2,9 +2,9 @@
 import React, { useEffect, useRef, useState, Suspense } from "react";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
 
-/* ---------------------
-   Config + helpers
-   --------------------- */
+/* ------------------------
+   Config + auth helpers
+   ------------------------ */
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
 
@@ -40,9 +40,10 @@ async function authFetch(input, opts = {}) {
   return fetch(input, merged);
 }
 
-/* ---------------------
-   Login / Register
-   --------------------- */
+/* ------------------------
+   Login / Register Pages
+   ------------------------ */
+
 function LoginPage({ onLogin }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
@@ -68,9 +69,18 @@ function LoginPage({ onLogin }) {
         setLoading(false);
         return;
       }
+
+      // Save token and user
       saveAuth(data.token, data.user);
-      onLogin(data.user);
-      navigate("/");
+      onLogin?.(data.user);
+
+      // Normalize role check and redirect accordingly
+      const role = (data.user?.role || "").toString().toLowerCase();
+      if (role === "recruiter") {
+        navigate("/recruiter-dashboard");
+      } else {
+        navigate("/");
+      }
     } catch (err) {
       console.error("Login error:", err);
       setErr("Network error during login");
@@ -153,8 +163,11 @@ function RegisterPage({ onLogin }) {
         return;
       }
       saveAuth(data.token, data.user);
-      onLogin(data.user);
-      navigate("/");
+      onLogin?.(data.user);
+
+      const r = (data.user?.role || "").toString().toLowerCase();
+      if (r === "recruiter") navigate("/recruiter-dashboard");
+      else navigate("/");
     } catch (err) {
       console.error("Register error:", err);
       setErr("Network error during registration");
@@ -245,9 +258,10 @@ function RegisterPage({ onLogin }) {
   );
 }
 
-/* ---------------------
-   Home (your original UI)
-   --------------------- */
+/* ------------------------
+   Home (analyzer + jobs) - your main UI
+   ------------------------ */
+
 function Home({ currentUser, setCurrentUser }) {
   const [fileName, setFileName] = useState("");
   const [parsedText, setParsedText] = useState("");
@@ -286,7 +300,7 @@ function Home({ currentUser, setCurrentUser }) {
     loadJobs();
   }, []);
 
-  // parse + analyze functions (same as your prior code)
+  // parse + analyze
   const analyzeResume = async () => {
     if (!fileRef.current?.files?.[0] && !parsedText) {
       setAnalysis({ error: "Please upload a file first." });
@@ -430,6 +444,7 @@ function Home({ currentUser, setCurrentUser }) {
     }
   };
 
+  // UI:
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       {/* Background */}
@@ -677,9 +692,9 @@ function Home({ currentUser, setCurrentUser }) {
   );
 }
 
-/* ---------------------
-   App root wrapper: routing
-   --------------------- */
+/* ------------------------
+   Router wrapper (default export)
+   ------------------------ */
 
 export default function AppRouterWrapper() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -687,7 +702,9 @@ export default function AppRouterWrapper() {
   useEffect(() => {
     const raw = localStorage.getItem("user");
     if (raw) {
-      try { setCurrentUser(JSON.parse(raw)); } catch {}
+      try {
+        setCurrentUser(JSON.parse(raw));
+      } catch {}
     }
   }, []);
 
@@ -695,18 +712,23 @@ export default function AppRouterWrapper() {
     setCurrentUser(user);
   };
 
-  const RecruiterDashboardLazy = React.lazy(() => import("./RecruiterDashboard.jsx").catch(() => ({ default: () => <div className="p-6">Recruiter dashboard not available.</div> })));
+  const RecruiterDashboardLazy = React.lazy(() =>
+    import("./RecruiterDashboard.jsx").catch(() => ({ default: () => <div className="p-6">Recruiter dashboard not available.</div> }))
+  );
 
   return (
     <Routes>
       <Route path="/" element={<Home currentUser={currentUser} setCurrentUser={setCurrentUser} />} />
       <Route path="/login" element={<LoginPage onLogin={onLogin} />} />
       <Route path="/register" element={<RegisterPage onLogin={onLogin} />} />
-      <Route path="/recruiter-dashboard" element={
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading dashboard...</div>}>
-          <RecruiterDashboardLazy />
-        </Suspense>
-      } />
+      <Route
+        path="/recruiter-dashboard"
+        element={
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading dashboard...</div>}>
+            <RecruiterDashboardLazy />
+          </Suspense>
+        }
+      />
     </Routes>
   );
 }
