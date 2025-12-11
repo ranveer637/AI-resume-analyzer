@@ -1,6 +1,12 @@
-// server.js (DB-backed auth + JWT)
-// Replace your existing server.js with this file.
-// Requires: mongoose, bcrypt, jsonwebtoken, express, multer, pdf-parse, mammoth, cors, node-fetch, dotenv, express-rate-limit
+// server.js
+// Full backend for AI Resume Analyzer + Job Board
+// - ES module style (type: "module" in package.json required)
+// - MongoDB via mongoose
+// - File uploads via multer (saved to /uploads)
+// - Parse PDF/DOCX/TXT (pdf-parse, mammoth)
+// - AI analyze using OpenAI (with retries) — fallback mock mode if OPENAI_API_KEY missing
+// - Job posting + applications stored in MongoDB (applications include resumePath + resumeFilename)
+// - Serve resume file via GET /api/applications/:appId/resume (inline display)
 
 import express from "express";
 import multer from "multer";
@@ -13,8 +19,6 @@ import fetch from "node-fetch";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 
 dotenv.config();
@@ -42,7 +46,7 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOADS_DIR,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
 });
 
 // ---------- MongoDB ----------
@@ -58,47 +62,41 @@ if (!MONGODB_URI) {
     .catch((err) => console.error("❌ MongoDB connection error:", err));
 }
 
-// ---------- USER model (for persistent auth) ----------
-const UserSchema = new mongoose.Schema({
-  fullName: { type: String, required: true },
-  email: { type: String, required: true, unique: true, index: true },
-  passwordHash: { type: String, required: true },
-  role: { type: String, enum: ["candidate", "recruiter", "admin"], required: true },
-  company: { type: String }, // optional for recruiters
-  createdAt: { type: Date, default: Date.now }
-}, { collection: "users" });
+// ---------- Mongoose schemas ----------
+const ApplicationSchema = new mongoose.Schema(
+  {
+    _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
+    candidateName: { type: String, required: true },
+    candidateEmail: { type: String, required: true },
+    atsScore: { type: Number },
+    notes: { type: String },
+    resumePath: { type: String },
+    resumeFilename: { type: String },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
 
-const User = mongoose.models?.User || mongoose.model("User", UserSchema);
-
-// ---------- Job & Application schemas (unchanged, but included for completeness) ----------
-const ApplicationSchema = new mongoose.Schema({
-  _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
-  candidateName: { type: String, required: true },
-  candidateEmail: { type: String, required: true },
-  atsScore: { type: Number },
-  notes: { type: String },
-  resumePath: { type: String },
-  resumeFilename: { type: String },
-  createdAt: { type: Date, default: Date.now },
-}, { _id: false });
-
-const JobSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  companyName: { type: String, required: true },
-  location: { type: String, default: "Not specified" },
-  qualifications: { type: String, required: true },
-  description: { type: String, default: "" },
-  recruiterEmail: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now },
-  applications: [ApplicationSchema],
-}, { collection: "jobs" });
+const JobSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    companyName: { type: String, required: true },
+    location: { type: String, default: "Not specified" },
+    qualifications: { type: String, required: true },
+    description: { type: String, default: "" },
+    recruiterEmail: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+    applications: [ApplicationSchema],
+  },
+  { collection: "jobs" }
+);
 
 const Job = mongoose.models?.Job || mongoose.model("Job", JobSchema);
 
-// ---------- Utility helpers (keyword extraction, PDF parse, AI retry) ----------
-// (Keep these identical to your previous server: tokenizeForKeywords, extractKeywords, estimateAtsScoreFromText, safeUnlink, readFileUtf8, safeParsePdfBuffer, callOpenAIWithRetries, etc.)
-// For brevity, I'm including the same helpers from your last working server — copy them exactly from your server, and ensure SKILLS_LIST and stopwords exist.
-// --- BEGIN helpers (copy over from previous server file) ---
+// ---------- In-memory users (demo only) ----------
+const users = [];
+
+// ---------- Keyword extraction helpers ----------
 const COMMON_STOPWORDS = new Set([
   "a","an","the","and","or","of","to","in","on","for","with","by","as","is","are","was","were",
   "be","been","has","have","had","that","this","these","those","at","from","it","its","but","not",
@@ -157,7 +155,10 @@ function extractKeywords(text, opts = {}) {
     if (topFrequent.length >= maxFreqTokens) break;
   }
 
-  const skillList = Array.from(foundSkills.entries()).sort((a, b) => b[1] - a[1]).map(x => x[0]);
+  const skillList = Array.from(foundSkills.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(x => x[0]);
+
   const topTokens = topFrequent.map(x => x.token);
   const combined = [...skillList, ...topTokens].filter((v, i, a) => a.indexOf(v) === i);
 
@@ -185,10 +186,27 @@ function estimateAtsScoreFromText(text, kw) {
 }
 
 function safeUnlink(filePath) {
-  try { if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) {}
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (e) {}
 }
-function readFileUtf8(filePath) { return fs.readFileSync(filePath, "utf8"); }
 
+function readFileUtf8(filePath) {
+  return fs.readFileSync(filePath, "utf8");
+}
+
+function extractJsonFromText(text) {
+  if (!text || typeof text !== "string") return null;
+  try { return JSON.parse(text); } catch {}
+  const firstCurly = text.indexOf("{");
+  const lastCurly = text.lastIndexOf("}");
+  if (firstCurly !== -1 && lastCurly !== -1 && lastCurly > firstCurly) {
+    try { return JSON.parse(text.slice(firstCurly, lastCurly + 1)); } catch {}
+  }
+  return null;
+}
+
+// ---------- Safe PDF parsing ----------
 async function safeParsePdfBuffer(buffer) {
   try {
     const data = await pdf(buffer);
@@ -199,6 +217,7 @@ async function safeParsePdfBuffer(buffer) {
   }
 }
 
+// ---------- OpenAI call with retries ----------
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function callOpenAIWithRetries(payload, attempts = 4, baseDelay = 600) {
@@ -213,6 +232,7 @@ async function callOpenAIWithRetries(payload, attempts = 4, baseDelay = 600) {
         },
         body: JSON.stringify(payload),
       });
+
       const text = await resp.text();
       if (resp.ok) return { ok: true, text, status: resp.status };
       lastErr = `status=${resp.status} body=${text}`;
@@ -228,113 +248,65 @@ async function callOpenAIWithRetries(payload, attempts = 4, baseDelay = 600) {
   }
   return { ok: false, text: lastErr || "exhausted retries", status: 429 };
 }
-// --- END helpers ---
-
-
-// ---------- JWT helpers & middleware ----------
-const JWT_SECRET = process.env.JWT_SECRET || "please_set_a_strong_jwt_secret";
-const JWT_EXPIRES = "30d"; // adjust as needed
-
-function signUserToken(user) {
-  return jwt.sign(
-    { sub: String(user._id), email: user.email, role: user.role, fullName: user.fullName },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES }
-  );
-}
-
-async function authMiddleware(req, res, next) {
-  try {
-    const auth = (req.headers.authorization || "").split(" ");
-    if (auth.length !== 2 || auth[0] !== "Bearer") {
-      req.user = null;
-      return next();
-    }
-    const token = auth[1];
-    const payload = jwt.verify(token, JWT_SECRET);
-    // attach user minimal info
-    req.user = { id: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName };
-    return next();
-  } catch (err) {
-    // token invalid -> treat as unauthenticated
-    req.user = null;
-    return next();
-  }
-}
-
-// Use auth middleware globally so routes can check req.user
-app.use(authMiddleware);
 
 // =====================================================
-//  AUTH ROUTES (now persistent in MongoDB)
+//  AUTH (simple in-memory demo)
 // =====================================================
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", (req, res) => {
   try {
     const { fullName, email, password, role, company } = req.body;
     if (!fullName || !email || !password || !role) {
       return res.status(400).json({ error: "fullName, email, password and role are required." });
     }
-    const exists = await User.findOne({ email }).lean();
-    if (exists) return res.status(409).json({ error: "User already exists. Please login." });
-
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-    const user = await User.create({ fullName, email, passwordHash, role, company: role === "recruiter" ? company || "" : undefined });
-    const token = signUserToken(user);
-    return res.json({ message: "Registration successful.", token, user: { id: user._id, fullName: user.fullName, email: user.email, role: user.role, company: user.company } });
+    const existing = users.find(u => u.email === email);
+    if (existing) return res.status(409).json({ error: "User exists." });
+    const user = { id: users.length + 1, fullName, email, password, role, company: role === "recruiter" ? company || "" : undefined, createdAt: new Date().toISOString() };
+    users.push(user);
+    const token = `mock-token-${user.id}-${Date.now()}`;
+    return res.json({ message: "Registration successful.", token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role, company: user.company } });
   } catch (err) {
     console.error("Register error:", err);
     return res.status(500).json({ error: "Internal error during registration." });
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, role } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password are required." });
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ error: "Invalid credentials." });
-
-    const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: "Invalid credentials." });
-
-    const token = signUserToken(user);
-    return res.json({ message: "Login successful.", token, user: { id: user._id, fullName: user.fullName, email: user.email, role: user.role, company: user.company } });
+    const user = users.find(u => u.email === email);
+    if (!user) return res.status(401).json({ error: "User not found." });
+    if (user.password !== password) return res.status(401).json({ error: "Invalid password." });
+    if (role && user.role !== role) return res.status(403).json({ error: `Account is "${user.role}" not "${role}".` });
+    const token = `mock-token-${user.id}-${Date.now()}`;
+    return res.json({ message: "Login successful.", token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role, company: user.company } });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "Internal error during login." });
   }
 });
 
-// Protected helper: require recruiter
-function requireRecruiter(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: "Authentication required." });
-  if (req.user.role !== "recruiter") return res.status(403).json({ error: "Recruiter access required." });
-  return next();
-}
-
 // =====================================================
-//  JOB ROUTES (now using authenticated user where appropriate)
+//  JOB API (MongoDB)
 // =====================================================
 
-// Recruiter creates a job post — require recruiter & use req.user.email as recruiterEmail
-app.post("/api/recruiter/jobs", requireRecruiter, async (req, res) => {
+// Create job (recruiter)
+app.post("/api/recruiter/jobs", async (req, res) => {
   try {
-    const { title, companyName, location, qualifications, description } = req.body;
-    const recruiterEmail = req.user.email;
-    if (!title || !companyName || !qualifications) {
-      return res.status(400).json({ error: "title, companyName, qualifications required." });
+    const { title, companyName, location, qualifications, description, recruiterEmail } = req.body;
+    if (!title || !companyName || !qualifications || !recruiterEmail) {
+      return res.status(400).json({ error: "title, companyName, qualifications, recruiterEmail required." });
     }
     const job = await Job.create({ title, companyName, location: location || "Not specified", qualifications, description: description || "", recruiterEmail });
-    return res.json({ message: "Job created successfully.", job });
+    return res.json({ message: "Job created.", job });
   } catch (err) {
     console.error("Create job error:", err);
     return res.status(500).json({ error: "Failed to create job." });
   }
 });
 
-// Candidate: list all jobs (public)
+// List all jobs (candidate)
 app.get("/api/jobs", async (req, res) => {
   try {
     const jobs = await Job.find().sort({ createdAt: -1 }).lean();
@@ -345,10 +317,11 @@ app.get("/api/jobs", async (req, res) => {
   }
 });
 
-// Recruiter: list own jobs (must be authenticated recruiter)
-app.get("/api/recruiter/jobs", requireRecruiter, async (req, res) => {
+// List recruiter's jobs
+app.get("/api/recruiter/jobs", async (req, res) => {
   try {
-    const recruiterEmail = req.user.email;
+    const recruiterEmail = req.query.recruiterEmail;
+    if (!recruiterEmail) return res.status(400).json({ error: "recruiterEmail required." });
     const jobs = await Job.find({ recruiterEmail }).sort({ createdAt: -1 }).lean();
     return res.json(jobs);
   } catch (err) {
@@ -357,21 +330,13 @@ app.get("/api/recruiter/jobs", requireRecruiter, async (req, res) => {
   }
 });
 
-// Candidate applies to job. If user authenticated and role === candidate, use their info. Otherwise accept candidateName/email from body.
-// Accepts file upload
+// Candidate applies to a job (accepts file)
 app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   let filePath = null;
   try {
     const { jobId } = req.params;
-
-    // Prefer authenticated candidate info when present
-    let candidateName = req.body.candidateName || req.body.name;
-    let candidateEmail = req.body.candidateEmail || req.body.email;
-    if (req.user && req.user.role === "candidate") {
-      candidateName = req.user.fullName;
-      candidateEmail = req.user.email;
-    }
-
+    const candidateName = req.body.candidateName || req.body.name;
+    const candidateEmail = req.body.candidateEmail || req.body.email;
     const atsScore = req.body.atsScore ? Number(req.body.atsScore) : undefined;
     const notes = req.body.notes || "";
 
@@ -404,40 +369,25 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
     job.applications.push(appObj);
     await job.save();
 
-    return res.json({ message: "Application submitted successfully.", applicationId: appObj._id });
+    return res.json({ message: "Application submitted.", applicationId: appObj._id });
   } catch (err) {
     console.error("Apply job error:", err);
     if (req.file && req.file.path) safeUnlink(req.file.path);
-    return res.status(500).json({ error: "Failed to apply for job." });
+    return res.status(500).json({ error: "Failed to apply." });
   }
 });
 
-// Serve resume file inline (only recruiter for that job or admin can view) -- authorization enforced
+// Serve resume file inline (view/download)
 app.get("/api/applications/:appId/resume", async (req, res) => {
   try {
     const { appId } = req.params;
     if (!appId) return res.status(400).json({ error: "appId required" });
 
-    // Find job containing this application
     const job = await Job.findOne({ "applications._id": appId }).lean();
     if (!job) return res.status(404).json({ error: "Application not found" });
 
-    const application = job.applications.find((a) => String(a._id) === String(appId));
+    const application = (job.applications || []).find(a => String(a._id) === String(appId));
     if (!application) return res.status(404).json({ error: "Application not found" });
-
-    // Authorization: only the recruiter who owns the job, or admin, or the candidate themselves may view
-    const viewer = req.user;
-    if (viewer) {
-      const isRecruiterOwner = viewer.role === "recruiter" && viewer.email === job.recruiterEmail;
-      const isAdmin = viewer.role === "admin";
-      const isCandidateSelf = viewer.role === "candidate" && viewer.email === application.candidateEmail;
-      if (!isRecruiterOwner && !isAdmin && !isCandidateSelf) {
-        return res.status(403).json({ error: "Not authorized to view this resume." });
-      }
-    } else {
-      // Unauthenticated requests are not allowed to view file
-      return res.status(401).json({ error: "Authentication required to view resume." });
-    }
 
     if (!application.resumePath) return res.status(404).json({ error: "No resume uploaded for this application." });
 
@@ -450,6 +400,7 @@ app.get("/api/applications/:appId/resume", async (req, res) => {
       console.warn("Resume path outside uploads dir:", absResume);
       return res.status(400).json({ error: "Invalid resume path." });
     }
+
     if (!fs.existsSync(absResume)) return res.status(404).json({ error: "Resume file missing on server." });
 
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
@@ -461,11 +412,165 @@ app.get("/api/applications/:appId/resume", async (req, res) => {
 });
 
 // =====================================================
-//  PARSE & ANALYZE (unchanged from prior)
+// PARSE & ANALYZE
 // =====================================================
-// Reuse the parse/analyze endpoints from your current server (copy them verbatim).
-// For brevity here: include your /api/parse and /api/analyze route implementations (exactly as in your working server).
-// Make sure they still exist here (I assume you already had them).
+
+app.post("/api/parse", upload.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: "No file uploaded." });
+
+  const filePath = file.path;
+  const originalName = file.originalname || "";
+  const mimetype = file.mimetype || "";
+
+  try {
+    let text = "";
+    if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
+      const buffer = fs.readFileSync(filePath);
+      text = await safeParsePdfBuffer(buffer);
+    } else if (originalName.toLowerCase().endsWith(".docx")) {
+      const result = await mammoth.extractRawText({ path: filePath });
+      text = result?.value || "";
+    } else {
+      text = readFileUtf8(filePath);
+    }
+
+    safeUnlink(filePath);
+
+    if (!text || text.trim().length === 0) {
+      return res.status(200).json({
+        text: "",
+        keywords: [],
+        skillsFound: [],
+        topTokens: [],
+        message: "No extractable text found. The file might be scanned or corrupted.",
+      });
+    }
+
+    const kw = extractKeywords(text);
+    return res.json({ text, keywords: kw.keywords, skillsFound: kw.skillsFound, topTokens: kw.topTokens });
+  } catch (err) {
+    safeUnlink(filePath);
+    console.error("Parse error:", err);
+    return res.status(500).json({ error: "Failed to parse file", message: err?.message || String(err) });
+  }
+});
+
+app.post("/api/analyze", upload.single("file"), async (req, res) => {
+  let filePath = null;
+  try {
+    let text = "";
+    if (req.file) {
+      filePath = req.file.path;
+      const originalName = req.file.originalname || "";
+      const mimetype = req.file.mimetype || "";
+
+      if (mimetype === "application/pdf" || originalName.toLowerCase().endsWith(".pdf")) {
+        const buffer = fs.readFileSync(filePath);
+        text = await safeParsePdfBuffer(buffer);
+      } else if (originalName.toLowerCase().endsWith(".docx")) {
+        text = (await mammoth.extractRawText({ path: filePath })).value || "";
+      } else {
+        text = readFileUtf8(filePath);
+      }
+      safeUnlink(filePath);
+    } else if (req.body.text) {
+      text = String(req.body.text);
+    } else {
+      return res.status(400).json({ error: "No file or text provided" });
+    }
+
+    if (!text || text.trim().length < 10) {
+      return res.status(400).json({ error: "Parsed text empty/too short", parsedLength: text?.length || 0 });
+    }
+
+    const kw = extractKeywords(text);
+    const USE_MOCK = process.env.OPENAI_MOCK === "true" || !process.env.OPENAI_API_KEY;
+    if (USE_MOCK) {
+      const mock = {
+        atsScore: estimateAtsScoreFromText(text, kw),
+        topSkills: ["JavaScript", "React", "Node.js"],
+        suggestions: ["Add measurable metrics to achievements.", "Move skills to a prominent top section.", "Use action verbs."],
+        rewrittenBullets: ["Optimized page load time by 40% by introducing code-splitting.", "Led a 3-person team to deliver a major feature early."],
+        keywords: kw.keywords,
+        skillsFound: kw.skillsFound,
+        topTokens: kw.topTokens,
+      };
+      return res.json(mock);
+    }
+
+    const prompt = `You are an expert resume reviewer. Given the resume text between triple backticks, return ONLY valid JSON with keys:
+- atsScore (integer 0-100),
+- topSkills (array of strings),
+- suggestions (array of strings),
+- rewrittenBullets (array of strings, up to 6),
+- keywords (array of strings listing main keywords/skills found).
+
+Resume:
+\`\`\`
+${text.slice(0, 6000)}
+\`\`\``;
+
+    const payload = {
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a helpful resume reviewer that outputs strict JSON." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 700,
+    };
+
+    const openaiResult = await callOpenAIWithRetries(payload, 5, 700);
+
+    if (!openaiResult.ok) {
+      console.error("OpenAI call failed after retries:", openaiResult);
+      if (openaiResult.status && openaiResult.status !== 429) {
+        return res.status(502).json({ error: "AI provider returned an error", status: openaiResult.status, details: openaiResult.text });
+      }
+      return res.status(200).json({
+        error: "AI provider rate-limited/unavailable. Returning keyword-only analysis.",
+        details: openaiResult.text,
+        atsScore: estimateAtsScoreFromText(text, kw),
+        keywords: kw.keywords,
+        skillsFound: kw.skillsFound,
+        topTokens: kw.topTokens,
+      });
+    }
+
+    const rawText = openaiResult.text;
+    let parsed = null;
+    try { parsed = JSON.parse(rawText); } catch { parsed = extractJsonFromText(rawText); }
+
+    if (!parsed) {
+      return res.status(200).json({
+        raw: rawText,
+        atsScore: estimateAtsScoreFromText(text, kw),
+        keywords: kw.keywords,
+        skillsFound: kw.skillsFound,
+        topTokens: kw.topTokens,
+      });
+    }
+
+    if (!parsed.keywords) parsed.keywords = kw.keywords;
+    if (!parsed.skillsFound) parsed.skillsFound = kw.skillsFound;
+    if (!parsed.topTokens) parsed.topTokens = kw.topTokens;
+
+    if (parsed.atsScore === undefined || parsed.atsScore === null || Number.isNaN(Number(parsed.atsScore))) {
+      parsed.atsScore = estimateAtsScoreFromText(text, kw);
+    } else {
+      let n = Number(parsed.atsScore);
+      if (!Number.isFinite(n)) n = estimateAtsScoreFromText(text, kw);
+      parsed.atsScore = Math.round(Math.max(0, Math.min(100, n)));
+    }
+
+    return res.json(parsed);
+  } catch (err) {
+    console.error("Analyze error:", err);
+    if (filePath) safeUnlink(filePath);
+    return res.status(500).json({ error: "Analysis failed", message: err?.message || String(err) });
+  }
+});
 
 // ---------- Static serve if built frontend exists ----------
 const DIST_DIR = path.join(__dirname, "dist");
@@ -479,6 +584,7 @@ if (fs.existsSync(DIST_DIR)) {
   console.warn("dist folder not found — run `npm run build` to generate it.");
 }
 
+// Health check
 app.get("/healthz", (_, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
 const PORT = process.env.PORT || 4000;
