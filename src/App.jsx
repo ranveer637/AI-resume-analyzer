@@ -19,6 +19,12 @@ export default function App() {
   const [jobsError, setJobsError] = useState("");
   const [applyStatus, setApplyStatus] = useState({}); // jobId -> message
 
+  // Recruiter: applications view
+  const [recruiterApps, setRecruiterApps] = useState([]); // array of { jobId, jobTitle, applications: [...] }
+  const [appsLoading, setAppsLoading] = useState(false);
+  const [appsError, setAppsError] = useState("");
+  const [selectedJobForView, setSelectedJobForView] = useState(null);
+
   const fileRef = useRef(null);
   const navigate = useNavigate();
 
@@ -60,6 +66,37 @@ export default function App() {
 
     loadJobs();
   }, []); // run once
+
+  // If user is recruiter, load applications grouped by job
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "recruiter") return;
+
+    const loadApplications = async () => {
+      try {
+        setAppsLoading(true);
+        setAppsError("");
+        // NOTE: backend should expose an endpoint that returns applications grouped by job
+        // Example expected response:
+        // [ { jobId, jobTitle, applications: [ { candidateName, candidateEmail, atsScore, notes, resumeText, resumeUrl, appliedAt } ] } ]
+        const res = await fetch(apiUrl("/api/recruiter/applications"), {
+          headers: { "Content-Type": "application/json" },
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setAppsError(data.error || "Failed to fetch applications.");
+          return;
+        }
+        setRecruiterApps(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("Recruiter applications fetch error:", err);
+        setAppsError("Failed to fetch applications.");
+      } finally {
+        setAppsLoading(false);
+      }
+    };
+
+    loadApplications();
+  }, [currentUser]);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -208,6 +245,8 @@ export default function App() {
         candidateEmail: currentUser.email,
         atsScore: atsDisplay ?? undefined,
         notes: "Applied via AI Resume Analyzer",
+        // include parsed resume text so recruiter can view it later (backend must accept it)
+        resumeText: parsedText || undefined,
       };
 
       const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
@@ -236,6 +275,11 @@ export default function App() {
         [jobId]: "Failed to apply. Please try again.",
       }));
     }
+  };
+
+  // Helper: toggle selected job in recruiter view
+  const toggleSelectJob = (jobId) => {
+    setSelectedJobForView((prev) => (prev === jobId ? null : jobId));
   };
 
   return (
@@ -518,7 +562,7 @@ export default function App() {
               >
                 <div>
                   <h3 className="text-sm font-semibold">
-                    {job.title}{" "}
+                    {job.title} {" "}
                     <span className="text-[11px] text-slate-400">
                       • {job.companyName}
                     </span>
@@ -529,8 +573,7 @@ export default function App() {
                 </div>
 
                 <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
-                  <strong>Required qualifications:</strong>{" "}
-                  {job.qualifications}
+                  <strong>Required qualifications:</strong> {job.qualifications}
                 </div>
 
                 {job.description && (
@@ -539,22 +582,150 @@ export default function App() {
                   </div>
                 )}
 
-                <button
-                  onClick={() => handleApplyToJob(job._id)}
-                  className="mt-1 px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
-                >
-                  Apply with this resume
-                </button>
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    onClick={() => handleApplyToJob(job._id)}
+                    className="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
+                  >
+                    Apply with this resume
+                  </button>
+
+                  {currentUser?.role === "recruiter" && (
+                    <button
+                      onClick={() => toggleSelectJob(job._id)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-600 text-[11px]"
+                    >
+                      {selectedJobForView === job._id ? "Hide Applicants" : "View Applicants"}
+                    </button>
+                  )}
+                </div>
 
                 {applyStatus[job._id] && (
                   <p className="text-[11px] mt-1 text-emerald-300">
                     {applyStatus[job._id]}
                   </p>
                 )}
+
+                {/* If recruiter clicked "View Applicants" show inline list for that job */}
+                {currentUser?.role === "recruiter" && selectedJobForView === job._id && (
+                  <div className="mt-3 bg-slate-900/60 border border-white/5 rounded p-3 text-xs">
+                    <h4 className="font-semibold mb-2">Applicants</h4>
+
+                    {appsLoading && <div>Loading applications...</div>}
+                    {appsError && (
+                      <div className="text-red-300">{appsError}</div>
+                    )}
+
+                    {!appsLoading && !appsError && (
+                      <div className="space-y-2">
+                        {(() => {
+                          // find matching group from recruiterApps
+                          const group = recruiterApps.find((g) => g.jobId === job._id) || { applications: [] };
+                          if ((group.applications || []).length === 0) {
+                            return <div className="text-xs text-slate-400">No applicants yet for this job.</div>;
+                          }
+
+                          return group.applications.map((app, i) => (
+                            <div key={i} className="border border-white/5 rounded p-2 bg-slate-950/70">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="font-semibold">{app.candidateName}</div>
+                                  <div className="text-[11px] text-slate-400">{app.candidateEmail}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[11px]">ATS: {typeof app.atsScore !== 'undefined' ? Math.min(100, Math.max(0, Number(app.atsScore))) : '--'}</div>
+                                  <div className="text-[11px] text-slate-400">{app.appliedAt ? new Date(app.appliedAt).toLocaleString() : ''}</div>
+                                </div>
+                              </div>
+
+                              {app.resumeUrl && (
+                                <div className="mt-2">
+                                  <a href={app.resumeUrl} target="_blank" rel="noreferrer" className="text-[11px] underline">Open resume file</a>
+                                </div>
+                              )}
+
+                              {app.resumeText && (
+                                <details className="mt-2 text-[11px] text-slate-400">
+                                  <summary className="cursor-pointer">View extracted resume text</summary>
+                                  <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-300 max-h-40 overflow-y-auto p-2 bg-slate-900/60 rounded">{app.resumeText}</div>
+                                </details>
+                              )}
+
+                              {app.notes && (
+                                <div className="mt-2 text-[11px] text-slate-400">Notes: {app.notes}</div>
+                              )}
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </section>
+
+        {/* RECRUITER: All applications (grouped) - visible only to recruiters */}
+        {currentUser?.role === "recruiter" && (
+          <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">All Applications</h2>
+              {appsLoading && <span className="text-[11px] text-slate-400">Loading...</span>}
+            </div>
+
+            {appsError && (
+              <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">{appsError}</div>
+            )}
+
+            {!appsLoading && recruiterApps.length === 0 && !appsError && (
+              <p className="text-xs text-slate-400">No applications yet.</p>
+            )}
+
+            <div className="space-y-4">
+              {recruiterApps.map((group) => (
+                <div key={group.jobId} className="rounded-xl border border-white/5 p-3 bg-slate-950/60">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold">{group.jobTitle}</div>
+                      <div className="text-[11px] text-slate-400">{group.jobId}</div>
+                    </div>
+                    <div className="text-[11px] text-slate-400">{group.applications?.length || 0} applicants</div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {(group.applications || []).map((app, idx) => (
+                      <div key={idx} className="border border-white/5 rounded p-2 bg-slate-900/60">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold">{app.candidateName}</div>
+                            <div className="text-[11px] text-slate-400">{app.candidateEmail}</div>
+                          </div>
+                          <div className="text-[11px]">ATS: {typeof app.atsScore !== 'undefined' ? Math.min(100, Math.max(0, Number(app.atsScore))) : '--'}</div>
+                        </div>
+
+                        {app.resumeText && (
+                          <details className="mt-2 text-[11px] text-slate-400">
+                            <summary className="cursor-pointer">View extracted resume text</summary>
+                            <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-300 max-h-40 overflow-y-auto p-2 bg-slate-900/60 rounded">{app.resumeText}</div>
+                          </details>
+                        )}
+
+                        {app.resumeUrl && (
+                          <div className="mt-2">
+                            <a href={app.resumeUrl} target="_blank" rel="noreferrer" className="text-[11px] underline">Open resume file</a>
+                          </div>
+                        )}
+
+                        {app.notes && <div className="mt-2 text-[11px] text-slate-400">Notes: {app.notes}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </main>
 
       <footer className="border-t border-white/10 text-center py-3 text-[11px] text-slate-500">
