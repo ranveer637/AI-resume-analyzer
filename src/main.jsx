@@ -1,19 +1,38 @@
 // src/main.jsx
 import React from "react";
-import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
-import App from "./App";
-import "./index.css";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-const rootElement = document.getElementById("root");
-if (!rootElement) {
-  throw new Error('Root element "#root" not found. Check public/index.html or index.html.');
+import "./index.css";
+import App from "./App";
+import Login from "./Login";
+import Register from "./Register";
+import RecruiterDashboard from "./RecruiterDashboard";
+
+function Root() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Main resume analyzer */}
+        <Route path="/" element={<App />} />
+        <Route path="/analyzer" element={<App />} />
+
+        {/* Auth */}
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+
+        {/* Hiring manager / admin dashboard */}
+        <Route path="/recruiter-dashboard" element={<RecruiterDashboard />} />
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
 
-createRoot(rootElement).render(
+ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <Root />
   </React.StrictMode>
 );
