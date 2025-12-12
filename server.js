@@ -17,6 +17,8 @@ import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
 import mongoose from "mongoose";
+import PDFDocument from "pdfkit";
+import mkdirp from "mkdirp";
 
 dotenv.config();
 
@@ -57,7 +59,9 @@ const ApplicationSchema = new mongoose.Schema(
     candidateEmail: { type: String, required: true },
     atsScore: { type: Number },
     notes: { type: String },
-    createdAt: { type: Date, default: Date.now },
+    resumeUrl: { type: String }, // URL to stored PDF
+    resumeText: { type: String }, // extracted text (optional)
+    appliedAt: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -80,12 +84,19 @@ const Job = mongoose.model("Job", JobSchema);
 
 // -------- Uploads directory --------
 const UPLOADS_DIR = path.join(__dirname, "uploads");
+const RESUMES_DIR = path.join(UPLOADS_DIR, "resumes");
+mkdirp.sync(RESUMES_DIR);
+
+// Make sure uploads folder exists
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
   dest: UPLOADS_DIR,
   limits: { fileSize: 15 * 1024 * 1024 },
 });
+
+// Serve resumes statically (so recruiter can open /resumes/<file>)
+app.use("/resumes", express.static(RESUMES_DIR));
 
 // -------- In-memory fake users (for demo only) --------
 const users = [];
@@ -220,7 +231,43 @@ async function safeParsePdfBuffer(buffer) {
   }
 }
 
-// -------- OpenAI with retries --------
+// -------- PDF generation from text --------
+async function generatePdfFromText(text, filenameBase = "resume") {
+  return new Promise((resolve, reject) => {
+    try {
+      const safeBase = filenameBase.replace(/[^a-z0-9-_]/gi, "_").toLowerCase();
+      const filename = `${safeBase}-${Date.now()}.pdf`;
+      const filepath = path.join(RESUMES_DIR, filename);
+
+      const doc = new PDFDocument({ size: "A4", margin: 50 });
+      const stream = fs.createWriteStream(filepath);
+      doc.pipe(stream);
+
+      // A light layout: header + wrapped text
+      doc.fontSize(14).text("Resume", { align: "center" });
+      doc.moveDown(0.5);
+      doc.fontSize(10);
+
+      const paragraphs = String(text).split(/\r?\n\r?\n/);
+      paragraphs.forEach((p) => {
+        // split long lines to avoid overflow
+        const lines = p.split(/\r?\n/);
+        lines.forEach((ln) => {
+          doc.text(ln.trim(), { paragraphGap: 2, lineGap: 2 });
+        });
+        doc.moveDown(0.3);
+      });
+
+      doc.end();
+      stream.on("finish", () => resolve({ filename, filepath }));
+      stream.on("error", (err) => reject(err));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// -------- OpenAI with retries (unchanged) --------
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -405,13 +452,52 @@ app.get("/api/recruiter/jobs", async (req, res) => {
   }
 });
 
+// Recruiter: return applications grouped by job (for recruiter dashboard)
+// Query: ?recruiterEmail=abc@example.com
+app.get("/api/recruiter/applications", async (req, res) => {
+  try {
+    const { recruiterEmail } = req.query;
+    if (!recruiterEmail) {
+      return res.status(400).json({ error: "recruiterEmail is required in query." });
+    }
+
+    const jobs = await Job.find({ recruiterEmail }).lean();
+    const out = jobs.map((j) => ({
+      jobId: j._id,
+      jobTitle: j.title,
+      applications: (j.applications || []).map((a) => ({
+        candidateName: a.candidateName,
+        candidateEmail: a.candidateEmail,
+        atsScore: a.atsScore,
+        notes: a.notes,
+        resumeUrl: a.resumeUrl,
+        resumeText: a.resumeText,
+        appliedAt: a.appliedAt,
+      })),
+    }));
+
+    return res.json(out);
+  } catch (err) {
+    console.error("Recruiter applications error:", err);
+    return res.status(500).json({ error: "Failed to fetch applications." });
+  }
+});
+
 // Candidate applies to a job
-app.post("/api/jobs/:jobId/apply", async (req, res) => {
+// Accepts multipart/form-data (file) OR JSON with resumeText
+app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
+  let tmpFilePath;
   try {
     const { jobId } = req.params;
-    const { candidateName, candidateEmail, atsScore, notes } = req.body;
+
+    // Accept either JSON fields or multipart form fields
+    const candidateName = req.body.candidateName || req.body.name;
+    const candidateEmail = req.body.candidateEmail || req.body.email;
+    const atsScore = req.body.atsScore ? Number(req.body.atsScore) : undefined;
+    const notes = req.body.notes || "";
 
     if (!candidateName || !candidateEmail) {
+      // missing required fields
       return res
         .status(400)
         .json({ error: "candidateName and candidateEmail are required." });
@@ -419,21 +505,121 @@ app.post("/api/jobs/:jobId/apply", async (req, res) => {
 
     const job = await Job.findById(jobId);
     if (!job) {
+      // cleanup tmp upload if any
+      if (req.file && req.file.path) safeUnlink(req.file.path);
       return res.status(404).json({ error: "Job not found." });
     }
 
+    let resumeFilename; // final PDF filename saved inside RESUMES_DIR
+    let extractedText = req.body.resumeText || "";
+
+    // If a file was uploaded, handle accordingly
+    if (req.file) {
+      tmpFilePath = req.file.path;
+      const originalName = req.file.originalname || "";
+      const mimetype = req.file.mimetype || "";
+
+      // If it's a PDF already, move/copy it into RESUMES_DIR
+      if (
+        mimetype === "application/pdf" ||
+        originalName.toLowerCase().endsWith(".pdf")
+      ) {
+        // move file into resumes dir with safe name
+        const safeName = `${Date.now()}-${originalName.replace(/\s+/g, "_")}`;
+        const target = path.join(RESUMES_DIR, safeName);
+        fs.renameSync(tmpFilePath, target);
+        resumeFilename = safeName;
+      } else if (originalName.toLowerCase().endsWith(".docx")) {
+        // extract text then generate PDF
+        try {
+          const mammothRes = await mammoth.extractRawText({ path: tmpFilePath });
+          extractedText = mammothRes?.value || extractedText || "";
+        } catch (err) {
+          console.warn("mammoth failed:", err?.message || err);
+          // fallback to empty extracted text
+        }
+        // generate PDF from extractedText
+        const base = (candidateEmail || "candidate").split("@")[0] || "candidate";
+        const gen = await generatePdfFromText(extractedText || " ", base);
+        resumeFilename = gen.filename;
+        // cleanup original docx
+        safeUnlink(tmpFilePath);
+      } else if (originalName.toLowerCase().endsWith(".txt")) {
+        try {
+          extractedText = fs.readFileSync(tmpFilePath, "utf8");
+        } catch (err) {
+          console.warn("txt read failed:", err?.message || err);
+        }
+        const base = (candidateEmail || "candidate").split("@")[0] || "candidate";
+        const gen = await generatePdfFromText(extractedText || " ", base);
+        resumeFilename = gen.filename;
+        safeUnlink(tmpFilePath);
+      } else {
+        // try parsing as PDF buffer first; if not, extract text and generate PDF
+        try {
+          const buffer = fs.readFileSync(tmpFilePath);
+          const parsedText = await safeParsePdfBuffer(buffer);
+          if (parsedText && parsedText.trim().length > 20) {
+            // it was actually a PDF disguised with a different mimetype
+            const safeName = `${Date.now()}-${originalName.replace(/\s+/g, "_")}.pdf`;
+            const target = path.join(RESUMES_DIR, safeName);
+            fs.renameSync(tmpFilePath, target);
+            resumeFilename = safeName;
+            extractedText = parsedText;
+          } else {
+            // fallback -> try to extract text (mammoth might fail when not docx)
+            try {
+              const mammothRes = await mammoth.extractRawText({ path: tmpFilePath });
+              extractedText = mammothRes?.value || extractedText || "";
+            } catch (err) {
+              // ignore
+            }
+            const base = (candidateEmail || "candidate").split("@")[0] || "candidate";
+            const gen = await generatePdfFromText(extractedText || " ", base);
+            resumeFilename = gen.filename;
+            safeUnlink(tmpFilePath);
+          }
+        } catch (err) {
+          // on any error, try to generate PDF from any provided resumeText or placeholder
+          console.warn("Generic file handling fallback:", err?.message || err);
+          const base = (candidateEmail || "candidate").split("@")[0] || "candidate";
+          const gen = await generatePdfFromText(extractedText || " ", base);
+          resumeFilename = gen.filename;
+          safeUnlink(tmpFilePath);
+        }
+      }
+    } else if (req.body.resumeText) {
+      // No file uploaded, but resumeText is provided -> generate PDF
+      const base = (candidateEmail || "candidate").split("@")[0] || "candidate";
+      const gen = await generatePdfFromText(req.body.resumeText || " ", base);
+      resumeFilename = gen.filename;
+      extractedText = req.body.resumeText || "";
+    } else {
+      // Nothing uploaded or provided - allow application without resume but no resumeUrl
+      resumeFilename = undefined;
+      extractedText = extractedText || "";
+    }
+
+    const resumeUrl = resumeFilename ? `${req.protocol}://${req.get("host")}/resumes/${resumeFilename}` : undefined;
+
+    // push application into job document
     job.applications.push({
       candidateName,
       candidateEmail,
       atsScore,
       notes,
+      resumeUrl,
+      resumeText: extractedText || undefined,
+      appliedAt: new Date(),
     });
 
     await job.save();
 
-    return res.json({ message: "Application submitted successfully." });
+    return res.json({ message: "Application submitted successfully.", resumeUrl });
   } catch (err) {
     console.error("Apply job error:", err);
+    // cleanup any tmp file
+    if (tmpFilePath) safeUnlink(tmpFilePath);
     return res.status(500).json({ error: "Failed to apply for job." });
   }
 });
