@@ -1,3 +1,4 @@
+
 {
   "name": "ai-resume-analyzer",
   "version": "1.0.0",
@@ -7,32 +8,30 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server.js",
-    "start:dev": "nodemon server.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "autoprefixer": "^10.4.14",
-    "bcrypt": "^5.1.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "jsonwebtoken": "^9.0.2",
-    "mammoth": "^1.6.0",
-    "mongoose": "^8.8.0",
+    "cors": "^2.8.5",
     "multer": "1.4.5-lts.1",
-    "node-fetch": "^3.3.2",
     "pdf-parse": "^1.1.1",
-    "pdfkit": "^0.13.0",
-    "postcss": "^8.4.21",
+    "mammoth": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "express-rate-limit": "^7.4.0",
+    "mongoose": "^8.8.0",
+    "bcrypt": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.27.0",
-    "tailwindcss": "^3.4.0"
+    "react-router-dom": "^6.27.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.1.0",
     "vite": "^5.1.0",
-    "nodemon": "^2.0.22"
+    "@vitejs/plugin-react": "^4.1.0",
+    "tailwindcss": "^3.4.0",
+    "postcss": "^8.4.21",
+    "autoprefixer": "^10.4.14"
   }
 }
+
