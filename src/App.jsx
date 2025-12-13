@@ -28,8 +28,8 @@ export default function App() {
   const fileRef = useRef(null);
   const navigate = useNavigate();
 
-  const API_BASE = import.meta.env.VITE_API_URL || "";
-  const apiUrl = (p) => `${API_BASE}${p.startsWith("/") ? p : "/" + p}`;
+ const apiUrl = (p) => p;
+
 
   // Load user from localStorage on mount
   useEffect(() => {
