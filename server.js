@@ -1,5 +1,5 @@
 // server.js
-// Express backend for AI Resume Analyzer + Job Board
+// Express backend for AI Resume Analyzer + Job Board (Render-ready)
 
 import express from "express";
 import multer from "multer";
@@ -26,18 +26,19 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // -------- Rate limiting --------
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-});
-app.use(limiter);
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+  })
+);
 
-// -------- MongoDB connection --------
+// -------- MongoDB --------
 mongoose
   .connect(process.env.MONGODB_URI, {
     dbName: process.env.MONGODB_DB || "ai-resume-analyzer",
   })
-  .then(() => console.log("✅ Connected to MongoDB"))
+  .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB error:", err));
 
 // -------- Schemas --------
@@ -67,21 +68,16 @@ const JobSchema = new mongoose.Schema({
 
 const Job = mongoose.model("Job", JobSchema);
 
-// -------- Upload directories (FIXED) --------
+// -------- Upload folders --------
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 const RESUMES_DIR = path.join(UPLOADS_DIR, "resumes");
 
-// ✅ Node-native replacement for mkdirp
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(RESUMES_DIR)) {
-  fs.mkdirSync(RESUMES_DIR, { recursive: true });
-}
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(RESUMES_DIR)) fs.mkdirSync(RESUMES_DIR, { recursive: true });
 
 const upload = multer({ dest: UPLOADS_DIR });
 
-// Serve resumes statically
+// Serve resumes
 app.use("/resumes", express.static(RESUMES_DIR));
 
 // -------- Helpers --------
@@ -119,7 +115,9 @@ function generatePdfFromText(text, base = "resume") {
   });
 }
 
-// -------- Apply to Job --------
+// =====================================================
+//  APPLY TO JOB (SAVE PDF)
+// =====================================================
 app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   try {
     const job = await Job.findById(req.params.jobId);
@@ -168,13 +166,31 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   }
 });
 
-// -------- Recruiter applications --------
+// =====================================================
+//  RECRUITER APPLICATIONS
+// =====================================================
 app.get("/api/recruiter/applications", async (req, res) => {
   const jobs = await Job.find({ recruiterEmail: req.query.recruiterEmail });
   res.json(jobs);
 });
 
-// -------- Health --------
+// =====================================================
+//  SERVE FRONTEND (VITE BUILD) – REQUIRED FOR RENDER
+// =====================================================
+const DIST_DIR = path.join(__dirname, "dist");
+
+if (fs.existsSync(DIST_DIR)) {
+  app.use(express.static(DIST_DIR));
+
+  app.get("*", (req, res) => {
+    if (req.path.startsWith("/api")) return res.status(404).end();
+    res.sendFile(path.join(DIST_DIR, "index.html"));
+  });
+} else {
+  console.warn("⚠️ dist folder not found. Did you run npm run build?");
+}
+
+// -------- Health check --------
 app.get("/healthz", (_, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 4000;
