@@ -32,12 +32,12 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// -------- MongoDB --------
+// -------- MongoDB connection --------
 mongoose
   .connect(process.env.MONGODB_URI, {
     dbName: process.env.MONGODB_DB || "ai-resume-analyzer",
   })
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(() => console.log("✅ Connected to MongoDB"))
   .catch((err) => console.error("❌ MongoDB error:", err));
 
 // -------- Schemas --------
@@ -71,6 +71,7 @@ const Job = mongoose.model("Job", JobSchema);
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 const RESUMES_DIR = path.join(UPLOADS_DIR, "resumes");
 
+// ✅ Node-native replacement for mkdirp
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -80,6 +81,7 @@ if (!fs.existsSync(RESUMES_DIR)) {
 
 const upload = multer({ dest: UPLOADS_DIR });
 
+// Serve resumes statically
 app.use("/resumes", express.static(RESUMES_DIR));
 
 // -------- Helpers --------
@@ -117,7 +119,7 @@ function generatePdfFromText(text, base = "resume") {
   });
 }
 
-// -------- Apply to Job (PDF SAVED) --------
+// -------- Apply to Job --------
 app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   try {
     const job = await Job.findById(req.params.jobId);
@@ -127,12 +129,13 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
     let resumeFilename;
 
     if (req.file) {
-      const ext = req.file.originalname.toLowerCase();
-      if (ext.endsWith(".pdf")) {
+      const name = req.file.originalname.toLowerCase();
+
+      if (name.endsWith(".pdf")) {
         resumeFilename = `${Date.now()}-${req.file.originalname}`;
         fs.renameSync(req.file.path, path.join(RESUMES_DIR, resumeFilename));
       } else {
-        if (ext.endsWith(".docx")) {
+        if (name.endsWith(".docx")) {
           resumeText = (await mammoth.extractRawText({ path: req.file.path })).value;
         } else {
           resumeText = fs.readFileSync(req.file.path, "utf8");
@@ -165,7 +168,7 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   }
 });
 
-// -------- Recruiter view applications --------
+// -------- Recruiter applications --------
 app.get("/api/recruiter/applications", async (req, res) => {
   const jobs = await Job.find({ recruiterEmail: req.query.recruiterEmail });
   res.json(jobs);
