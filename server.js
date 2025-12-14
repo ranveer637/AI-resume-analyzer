@@ -1,5 +1,5 @@
 // server.js
-// Express backend for AI Resume Analyzer + Job Board
+// AI Resume Analyzer + Job Board (Render-ready)
 
 import express from "express";
 import multer from "multer";
@@ -8,7 +8,6 @@ import mammoth from "mammoth";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
-import fetch from "node-fetch";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import { fileURLToPath } from "url";
@@ -17,15 +16,19 @@ import PDFDocument from "pdfkit";
 
 dotenv.config();
 
+/* -------------------------------------------------- */
+/*  BASIC SETUP                                       */
+/* -------------------------------------------------- */
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// -------- Rate limiting --------
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -33,7 +36,10 @@ app.use(
   })
 );
 
-// -------- MongoDB --------
+/* -------------------------------------------------- */
+/*  MONGODB                                          */
+/* -------------------------------------------------- */
+
 mongoose
   .connect(process.env.MONGODB_URI, {
     dbName: process.env.MONGODB_DB || "ai-resume-analyzer",
@@ -41,7 +47,10 @@ mongoose
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB error:", err));
 
-// -------- Schemas --------
+/* -------------------------------------------------- */
+/*  SCHEMAS                                          */
+/* -------------------------------------------------- */
+
 const ApplicationSchema = new mongoose.Schema(
   {
     candidateName: String,
@@ -68,35 +77,29 @@ const JobSchema = new mongoose.Schema({
 
 const Job = mongoose.model("Job", JobSchema);
 
-// =====================================================
-//  UPLOAD DIRECTORIES (mkdirp REMOVED)
-// =====================================================
+/* -------------------------------------------------- */
+/*  DIRECTORIES (NO mkdirp)                           */
+/* -------------------------------------------------- */
+
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 const RESUMES_DIR = path.join(UPLOADS_DIR, "resumes");
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
-if (!fs.existsSync(RESUMES_DIR)) {
-  fs.mkdirSync(RESUMES_DIR, { recursive: true });
-}
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(RESUMES_DIR)) fs.mkdirSync(RESUMES_DIR, { recursive: true });
 
 const upload = multer({ dest: UPLOADS_DIR });
 
-// Serve resumes
+// Serve resume PDFs
 app.use("/resumes", express.static(RESUMES_DIR));
 
-// =====================================================
-//  HELPERS
-// =====================================================
+/* -------------------------------------------------- */
+/*  HELPERS                                          */
+/* -------------------------------------------------- */
+
 function safeUnlink(p) {
   try {
     if (p && fs.existsSync(p)) fs.unlinkSync(p);
   } catch {}
-}
-
-function readFileUtf8(p) {
-  return fs.readFileSync(p, "utf8");
 }
 
 async function safeParsePdfBuffer(buffer) {
@@ -108,262 +111,181 @@ async function safeParsePdfBuffer(buffer) {
   }
 }
 
-function extractJsonFromText(text) {
-  try {
-    return JSON.parse(text);
-  } catch {}
-  const s = text.indexOf("{");
-  const e = text.lastIndexOf("}");
-  if (s !== -1 && e !== -1 && e > s) {
-    try {
-      return JSON.parse(text.slice(s, e + 1));
-    } catch {}
-  }
-  return null;
+function generatePdfFromText(text, base = "resume") {
+  return new Promise((resolve) => {
+    const filename = `${base}-${Date.now()}.pdf`;
+    const filepath = path.join(RESUMES_DIR, filename);
+
+    const doc = new PDFDocument({ margin: 40 });
+    const stream = fs.createWriteStream(filepath);
+    doc.pipe(stream);
+
+    doc.fontSize(16).text("Resume", { align: "center" });
+    doc.moveDown();
+    doc.fontSize(10).text(text || " ");
+
+    doc.end();
+    stream.on("finish", () => resolve(filename));
+  });
 }
 
-// =====================================================
-//  ATS FALLBACK
-// =====================================================
-function estimateAtsScoreFromText(text, kw) {
-  let score = 40;
-  const len = (text || "").split(/\s+/).length;
-  if (len > 150) score += 10;
-  if (len > 300) score += 10;
-  if ((kw?.keywords || []).length > 10) score += 20;
-  return Math.min(95, Math.max(30, score));
-}
+/* -------------------------------------------------- */
+/*  AUTH (IN-MEMORY – DEMO)                           */
+/* -------------------------------------------------- */
 
-// =====================================================
-//  ANALYZE ROUTE (YOUR LOGIC – UNCHANGED)
-// =====================================================
-app.post("/api/analyze", upload.single("file"), async (req, res) => {
-  let filePath;
-  try {
-    let text = "";
-
-    if (req.file) {
-      filePath = req.file.path;
-      const name = req.file.originalname.toLowerCase();
-
-      if (name.endsWith(".pdf")) {
-        text = await safeParsePdfBuffer(fs.readFileSync(filePath));
-      } else if (name.endsWith(".docx")) {
-        text = (await mammoth.extractRawText({ path: filePath })).value || "";
-      } else {
-        text = readFileUtf8(filePath);
-      }
-      safeUnlink(filePath);
-    } else if (req.body.text) {
-      text = String(req.body.text);
-    } else {
-      return res.status(400).json({ error: "No file or text provided" });
-    }
-
-    const kw = { keywords: [], skillsFound: [], topTokens: [] };
-
-    const payload = {
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Return strict JSON." },
-        { role: "user", content: text.slice(0, 6000) },
-      ],
-    };
-
-    const openaiResult = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const rawText = await openaiResult.text();
-    let parsed = null;
-
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      parsed = extractJsonFromText(rawText);
-    }
-
-    if (!parsed) {
-      return res.json({
-        raw: rawText,
-        atsScore: estimateAtsScoreFromText(text, kw),
-        keywords: kw.keywords,
-        skillsFound: kw.skillsFound,
-        topTokens: kw.topTokens,
-      });
-    }
-
-    if (!parsed.atsScore || isNaN(parsed.atsScore)) {
-      parsed.atsScore = estimateAtsScoreFromText(text, kw);
-    }
-
-    return res.json(parsed);
-  } catch (err) {
-    console.error("Analyze error:", err);
-    safeUnlink(filePath);
-    return res.status(500).json({ error: "Analysis failed" });
-  }
-});
-// =====================================================
-//  AUTH ROUTES (DEMO / IN-MEMORY)
-// =====================================================
 const users = [];
 
 app.post("/api/auth/register", (req, res) => {
-  try {
-    const { fullName, email, password, role, company } = req.body;
+  const { fullName, email, password, role, company } = req.body;
 
-    if (!fullName || !email || !password || !role) {
-      return res.status(400).json({
-        error: "fullName, email, password and role are required",
-      });
-    }
+  if (!fullName || !email || !password || !role) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
 
-    const existing = users.find((u) => u.email === email);
-    if (existing) {
-      return res.status(409).json({ error: "User already exists" });
-    }
+  if (users.find((u) => u.email === email)) {
+    return res.status(409).json({ error: "User already exists" });
+  }
 
-    const user = {
-      id: users.length + 1,
+  const user = {
+    id: users.length + 1,
+    fullName,
+    email,
+    password,
+    role,
+    company: role === "recruiter" ? company || "" : undefined,
+  };
+
+  users.push(user);
+
+  res.json({
+    token: `mock-token-${user.id}`,
+    user: {
+      id: user.id,
       fullName,
       email,
-      password, // demo only (no hashing)
       role,
-      company: role === "recruiter" ? company || "" : undefined,
-      createdAt: new Date().toISOString(),
-    };
-
-    users.push(user);
-
-    return res.json({
-      message: "Registration successful",
-      token: `mock-token-${user.id}`,
-      user: {
-        id: user.id,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        company: user.company,
-      },
-    });
-  } catch (err) {
-    console.error("Register error:", err);
-    res.status(500).json({ error: "Registration failed" });
-  }
+      company: user.company,
+    },
+  });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  try {
-    const { email, password, role } = req.body;
+  const { email, password, role } = req.body;
 
-    const user = users.find((u) => u.email === email);
-    if (!user || user.password !== password) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
+  const user = users.find((u) => u.email === email && u.password === password);
+  if (!user) return res.status(401).json({ error: "Invalid credentials" });
 
-    if (role && user.role !== role) {
-      return res.status(403).json({
-        error: `Account is registered as ${user.role}`,
-      });
-    }
-
-    return res.json({
-      message: "Login successful",
-      token: `mock-token-${user.id}`,
-      user: {
-        id: user.id,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        company: user.company,
-      },
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Login failed" });
+  if (role && user.role !== role) {
+    return res.status(403).json({ error: "Role mismatch" });
   }
+
+  res.json({
+    token: `mock-token-${user.id}`,
+    user: {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      company: user.company,
+    },
+  });
 });
 
-// =====================================================
-//  LIST ALL JOBS (CANDIDATE – OPEN POSITIONS)
-// =====================================================
-app.get("/api/jobs", async (req, res) => {
-  try {
-    const jobs = await Job.find().sort({ createdAt: -1 }).lean();
-    res.json(jobs);
-  } catch (err) {
-    console.error("Fetch jobs error:", err);
-    res.status(500).json({ error: "Failed to fetch jobs" });
-  }
-});
-// =====================================================
-//  RECRUITER JOB ROUTES
-// =====================================================
+/* -------------------------------------------------- */
+/*  JOB ROUTES                                       */
+/* -------------------------------------------------- */
 
-// Create a job (Recruiter)
+// Candidate – list jobs
+app.get("/api/jobs", async (_, res) => {
+  const jobs = await Job.find().sort({ createdAt: -1 }).lean();
+  res.json(jobs);
+});
+
+// Recruiter – create job
 app.post("/api/recruiter/jobs", async (req, res) => {
-  try {
-    const {
-      title,
-      companyName,
-      location,
-      qualifications,
-      description,
-      recruiterEmail,
-    } = req.body;
+  const { title, companyName, location, qualifications, description, recruiterEmail } = req.body;
 
-    if (!title || !companyName || !qualifications || !recruiterEmail) {
-      return res.status(400).json({
-        error: "title, companyName, qualifications and recruiterEmail are required",
-      });
+  if (!title || !companyName || !qualifications || !recruiterEmail) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  const job = await Job.create({
+    title,
+    companyName,
+    location: location || "Not specified",
+    qualifications,
+    description: description || "",
+    recruiterEmail,
+  });
+
+  res.json({ message: "Job created", job });
+});
+
+// Recruiter – fetch own jobs
+app.get("/api/recruiter/jobs", async (req, res) => {
+  const { recruiterEmail } = req.query;
+  if (!recruiterEmail) return res.status(400).json({ error: "recruiterEmail required" });
+
+  const jobs = await Job.find({ recruiterEmail }).sort({ createdAt: -1 }).lean();
+  res.json(jobs);
+});
+
+/* -------------------------------------------------- */
+/*  APPLY TO JOB (SAVE RESUME PDF)                    */
+/* -------------------------------------------------- */
+
+app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+
+    let resumeText = req.body.resumeText || "";
+    let resumeFilename;
+
+    if (req.file) {
+      const name = req.file.originalname.toLowerCase();
+
+      if (name.endsWith(".pdf")) {
+        resumeFilename = `${Date.now()}-${req.file.originalname}`;
+        fs.renameSync(req.file.path, path.join(RESUMES_DIR, resumeFilename));
+      } else {
+        if (name.endsWith(".docx")) {
+          resumeText = (await mammoth.extractRawText({ path: req.file.path })).value;
+        } else {
+          resumeText = fs.readFileSync(req.file.path, "utf8");
+        }
+        resumeFilename = await generatePdfFromText(resumeText, req.body.candidateEmail || "candidate");
+        safeUnlink(req.file.path);
+      }
+    } else if (resumeText) {
+      resumeFilename = await generatePdfFromText(resumeText, req.body.candidateEmail || "candidate");
     }
 
-    const job = await Job.create({
-      title,
-      companyName,
-      location: location || "Not specified",
-      qualifications,
-      description: description || "",
-      recruiterEmail,
+    const resumeUrl = resumeFilename
+      ? `${req.protocol}://${req.get("host")}/resumes/${resumeFilename}`
+      : null;
+
+    job.applications.push({
+      candidateName: req.body.candidateName,
+      candidateEmail: req.body.candidateEmail,
+      atsScore: req.body.atsScore,
+      notes: req.body.notes,
+      resumeUrl,          // ✅ FIXED
+      resumeText,
     });
 
-    res.json({ message: "Job created successfully", job });
+    await job.save();
+    res.json({ message: "Applied successfully", resumeUrl });
   } catch (err) {
-    console.error("Create job error:", err);
-    res.status(500).json({ error: "Failed to create job" });
+    console.error(err);
+    res.status(500).json({ error: "Apply failed" });
   }
 });
 
-// Fetch jobs created by recruiter
-app.get("/api/recruiter/jobs", async (req, res) => {
-  try {
-    const { recruiterEmail } = req.query;
+/* -------------------------------------------------- */
+/*  STATIC FRONTEND (RENDER FIX)                      */
+/* -------------------------------------------------- */
 
-    if (!recruiterEmail) {
-      return res.status(400).json({ error: "recruiterEmail is required" });
-    }
-
-    const jobs = await Job.find({ recruiterEmail })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.json(jobs);
-  } catch (err) {
-    console.error("Fetch recruiter jobs error:", err);
-    res.status(500).json({ error: "Failed to fetch recruiter jobs" });
-  }
-});
-
-
-// =====================================================
-//  SERVE FRONTEND (RENDER FIX)
-// =====================================================
 const DIST_DIR = path.join(__dirname, "dist");
 
 if (fs.existsSync(DIST_DIR)) {
@@ -373,16 +295,12 @@ if (fs.existsSync(DIST_DIR)) {
     res.sendFile(path.join(DIST_DIR, "index.html"));
   });
 } else {
-  console.warn("⚠️ dist folder not found — run npm run build");
+  console.warn("⚠️ dist folder not found – run npm run build");
 }
 
-// -------- Health --------
-app.get("/healthz", (_, res) =>
-  res.json({ status: "ok", time: new Date().toISOString() })
-);
+/* -------------------------------------------------- */
+
+app.get("/healthz", (_, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on PORT=${PORT}`);
-});
-
+app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
