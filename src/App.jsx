@@ -244,74 +244,63 @@ export default function App() {
       setLoading(true);
 
       // If user uploaded a raw resume file, send it as multipart/form-data so backend can store it directly.
-      if (fileRef.current?.files?.[0]) {
-        const fd = new FormData();
-        fd.append("file", fileRef.current.files[0]);
-        fd.append("candidateName", currentUser.fullName);
-        fd.append("candidateEmail", currentUser.email);
-        fd.append("atsScore", atsDisplay ?? "");
-        fd.append("notes", "Applied via AI Resume Analyzer");
-        // include parsed text as well (optional)
-        if (parsedText) fd.append("resumeText", parsedText);
+      const handleApplyToJob = async (jobId) => {
+  if (!currentUser) {
+    alert("Please login as a candidate to apply.");
+    navigate("/login");
+    return;
+  }
 
-        const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
-          method: "POST",
-          body: fd,
-        });
+  if (currentUser.role !== "candidate") {
+    alert("Only candidate accounts can apply to jobs.");
+    return;
+  }
 
-        const data = await res.json();
-        if (!res.ok) {
-          setApplyStatus((prev) => ({
-            ...prev,
-            [jobId]: data.error || "Failed to apply.",
-          }));
-          return;
-        }
+  if (!parsedText || !parsedText.trim()) {
+    alert("Please upload your resume first.");
+    return;
+  }
 
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: "✅ Application submitted!",
-        }));
-      } else {
-        // No file uploaded: send JSON with resumeText. Backend will generate a PDF from this text and return a resumeUrl.
-        const body = {
-          candidateName: currentUser.fullName,
-          candidateEmail: currentUser.email,
-          atsScore: atsDisplay ?? undefined,
-          notes: "Applied via AI Resume Analyzer",
-          resumeText: parsedText || undefined,
-        };
+  try {
+    setLoading(true);
 
-        const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+    const body = {
+      candidateName: currentUser.fullName,   // ✅ REQUIRED
+      candidateEmail: currentUser.email,     // ✅ REQUIRED
+      atsScore: atsDisplay ?? null,
+      resumeText: parsedText,                // ✅ REQUIRED FOR PDF
+    };
 
-        const data = await res.json();
-        if (!res.ok) {
-          setApplyStatus((prev) => ({
-            ...prev,
-            [jobId]: data.error || "Failed to apply.",
-          }));
-          return;
-        }
+    const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: "✅ Application submitted!",
-        }));
-      }
-    } catch (err) {
-      console.error("Apply error:", err);
+    const data = await res.json();
+
+    if (!res.ok) {
       setApplyStatus((prev) => ({
         ...prev,
-        [jobId]: "Failed to apply. Please try again.",
+        [jobId]: data.error || "Failed to apply.",
       }));
-    } finally {
-      setLoading(false);
+      return;
     }
-  };
+
+    setApplyStatus((prev) => ({
+      ...prev,
+      [jobId]: "✅ Application submitted!",
+    }));
+  } catch (err) {
+    console.error("Apply error:", err);
+    setApplyStatus((prev) => ({
+      ...prev,
+      [jobId]: "Failed to apply. Please try again.",
+    }));
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Helper: toggle selected job in recruiter view
   const toggleSelectJob = (jobId) => {
