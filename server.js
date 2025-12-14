@@ -266,6 +266,30 @@ app.post("/api/analyze", async (req, res) => {
 });
 
 /* -------------------------------------------------- */
+/* RECRUITER: FETCH OWN JOB POSTS */
+/* -------------------------------------------------- */
+app.get("/api/recruiter/jobs", async (req, res) => {
+  try {
+    const { recruiterEmail } = req.query;
+
+    if (!recruiterEmail) {
+      return res.status(400).json({
+        error: "recruiterEmail is required",
+      });
+    }
+
+    const jobs = await Job.find({ recruiterEmail })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json(jobs);
+  } catch (err) {
+    console.error("Recruiter jobs fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch recruiter jobs" });
+  }
+});
+
+/* -------------------------------------------------- */
 /* STATIC FRONTEND (RENDER FIX) */
 /* -------------------------------------------------- */
 const DIST = path.join(__dirname, "dist");
