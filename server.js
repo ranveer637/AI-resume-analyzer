@@ -55,11 +55,14 @@ const ApplicationSchema = new mongoose.Schema(
     candidateName: String,
     candidateEmail: String,
     atsScore: Number,
-    resumeUrl: String,
+    resumeUrl: String,   // ✅ PDF link
+    resumeText: String,  // ✅ optional
+    notes: String,       // ✅ optional
     appliedAt: Date,
   },
   { _id: false }
 );
+
 
 const JobSchema = new mongoose.Schema({
   title: String,
