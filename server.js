@@ -1,3 +1,4 @@
+
 // server.js
 // AI Resume Analyzer + Job Board (Render-ready)
 
@@ -431,52 +432,6 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
   }
 });
 
-app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
-  try {
-    const job = await Job.findById(req.params.jobId);
-    if (!job) {
-      return res.status(404).json({ error: "Job not found" });
-    }
-
-    let resumeText = "";
-    let resumeFilename;
-
-    // Handle uploaded file
-    if (req.file) {
-      const name = req.file.originalname.toLowerCase();
-
-      if (name.endsWith(".pdf")) {
-        resumeFilename = `${Date.now()}-${req.file.originalname}`;
-        fs.renameSync(req.file.path, path.join(RESUMES_DIR, resumeFilename));
-      } else if (name.endsWith(".docx")) {
-        resumeText =
-          (await mammoth.extractRawText({ path: req.file.path })).value || "";
-        resumeFilename = await generatePdfFromText(resumeText, req.body.candidateEmail || "candidate");
-        fs.unlinkSync(req.file.path);
-      }
-    }
-
-    const resumeUrl = resumeFilename
-      ? `${req.protocol}://${req.get("host")}/resumes/${resumeFilename}`
-      : null;
-
-    // 🔴 THIS CREATES applications[]
-    job.applications.push({
-      candidateName: req.body.candidateName,
-      candidateEmail: req.body.candidateEmail,
-      atsScore: req.body.atsScore,
-      resumeUrl,
-      appliedAt: new Date(),
-    });
-
-    await job.save(); // 🔴 WITHOUT THIS NOTHING SAVES
-
-    res.json({ message: "Applied successfully", resumeUrl });
-  } catch (err) {
-    console.error("Apply error:", err);
-    res.status(500).json({ error: "Apply failed" });
-  }
-});
 
 /* -------------------------------------------------- */
 /*  STATIC FRONTEND (RENDER FIX)                      */
