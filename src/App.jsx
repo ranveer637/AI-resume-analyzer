@@ -69,58 +69,39 @@ export default function App() {
   }, []); // run once
 
   // If user is recruiter, load applications grouped by job
-  useEffect(() => {
-    if (!currentUser || currentUser.role !== "recruiter") return;
+  // If user is recruiter, load applications grouped by job
+useEffect(() => {
+  if (!currentUser || currentUser.role !== "recruiter") return;
 
-    const loadApplications = async () => {
-      try {
-        setAppsLoading(true);
-        setAppsError("");
-        // NOTE: backend should expose an endpoint that returns applications grouped by job
-        // Example expected response:
-        // [ { jobId, jobTitle, applications: [ { candidateName, candidateEmail, atsScore, notes, resumeText, resumeUrl, appliedAt } ] } ]
-        const res = await fetch(
-  apiUrl(`/api/recruiter/applications?recruiterEmail=${currentUser.email}`),
-  {
-    headers: { "Content-Type": "application/json" },
-  }
-);
-app.get("/api/recruiter/applications", async (req, res) => {
-  try {
-    const { recruiterEmail } = req.query;
+  const loadApplications = async () => {
+    try {
+      setAppsLoading(true);
+      setAppsError("");
 
-    if (!recruiterEmail) {
-      return res.status(400).json({
-        error: "recruiterEmail is required",
-      });
+      const res = await fetch(
+        apiUrl(`/api/recruiter/applications?recruiterEmail=${currentUser.email}`),
+        { headers: { "Content-Type": "application/json" } }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAppsError(data.error || "Failed to fetch applications.");
+        return;
+      }
+
+      setRecruiterApps(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Recruiter applications fetch error:", err);
+      setAppsError("Failed to fetch applications.");
+    } finally {
+      setAppsLoading(false);
     }
+  };
 
-    const jobs = await Job.find({ recruiterEmail }).lean();
+  loadApplications();
+}, [currentUser]);
 
-    const response = jobs.map((job) => ({
-      jobId: job._id.toString(),
-      jobTitle: job.title,
-      applications: (job.applications || []).map((app) => ({
-        candidateName: app.candidateName,
-        candidateEmail: app.candidateEmail,
-        atsScore: app.atsScore,
-        resumeUrl: app.resumeUrl,     // ✅ CRITICAL
-        resumeText: app.resumeText,   // optional
-        appliedAt: app.appliedAt,
-        notes: app.notes,
-      })),
-    }));
-
-    return res.json(response);
-  } catch (err) {
-    console.error("Recruiter applications error:", err);
-    return res.status(500).json({ error: "Failed to fetch applications." });
-  }
-});
-
-
-    loadApplications();
-  }, [currentUser]);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
