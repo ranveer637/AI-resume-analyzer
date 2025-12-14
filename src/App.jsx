@@ -686,72 +686,116 @@ const handleApplyToJob = async (jobId) => {
   ));
 })()}
 
+       {/* RECRUITER: All applications (grouped) - visible only to recruiters */}
+{currentUser?.role === "recruiter" && (
+  <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
+    <div className="flex items-center justify-between">
+      <h2 className="text-sm font-semibold">All Applications</h2>
+      {appsLoading && (
+        <span className="text-[11px] text-slate-400">Loading...</span>
+      )}
+    </div>
 
-        {/* RECRUITER: All applications (grouped) - visible only to recruiters */}
-        {currentUser?.role === "recruiter" && (
-          <section className="rounded-2xl border border-white/10 bg-slate-900/80 p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">All Applications</h2>
-              {appsLoading && <span className="text-[11px] text-slate-400">Loading...</span>}
+    {appsError && (
+      <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">
+        {appsError}
+      </div>
+    )}
+
+    {!appsLoading && recruiterApps.length === 0 && !appsError && (
+      <p className="text-xs text-slate-400">No applications yet.</p>
+    )}
+
+    <div className="space-y-4">
+      {recruiterApps.map((group) => (
+        <div
+          key={group.jobId}
+          className="rounded-xl border border-white/5 p-3 bg-slate-950/60"
+        >
+          {/* Job header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="font-semibold">{group.jobTitle}</div>
+              <div className="text-[11px] text-slate-400">
+                Job ID: {group.jobId}
+              </div>
             </div>
+            <div className="text-[11px] text-slate-400">
+              {group.applications?.length || 0} applicants
+            </div>
+          </div>
 
-            {appsError && (
-              <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/40 rounded p-2">{appsError}</div>
-            )}
-
-            {!appsLoading && recruiterApps.length === 0 && !appsError && (
-              <p className="text-xs text-slate-400">No applications yet.</p>
-            )}
-
-            <div className="space-y-4">
-              {recruiterApps.map((group) => (
-                <div key={group.jobId} className="rounded-xl border border-white/5 p-3 bg-slate-950/60">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold">{group.jobTitle}</div>
-                      <div className="text-[11px] text-slate-400">{group.jobId}</div>
+          {/* Applications list */}
+          <div className="mt-3 space-y-2">
+            {(group.applications || []).map((app, idx) => (
+              <div
+                key={idx}
+                className="border border-white/5 rounded p-2 bg-slate-900/60"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">
+                      {app.candidateName || "Unnamed Candidate"}
                     </div>
-                    <div className="text-[11px] text-slate-400">{group.applications?.length || 0} applicants</div>
+                    <div className="text-[11px] text-slate-400">
+                      {app.candidateEmail || "No email"}
+                    </div>
                   </div>
 
-                  <div className="mt-3 space-y-2">
-                    {(group.applications || []).map((app, idx) => (
-                      <div key={idx} className="border border-white/5 rounded p-2 bg-slate-900/60">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold">{app.candidateName}</div>
-                            <div className="text-[11px] text-slate-400">{app.candidateEmail}</div>
-                          </div>
-                          <div className="text-[11px]">ATS: {typeof app.atsScore !== 'undefined' ? Math.min(100, Math.max(0, Number(app.atsScore))) : '--'}</div>
-                        </div>
-
-                        {app.resumeText && (
-                          <details className="mt-2 text-[11px] text-slate-400">
-                            <summary className="cursor-pointer">View extracted resume text</summary>
-                            <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-300 max-h-40 overflow-y-auto p-2 bg-slate-900/60 rounded">{app.resumeText}</div>
-                          </details>
-                        )}
-
-                        {app.resumeUrl && (
-                          <div className="mt-2">
-                            <a href={app.resumeUrl} target="_blank" rel="noreferrer" className="text-[11px] underline">Open resume file</a>
-                          </div>
-                        )}
-
-                        {app.notes && <div className="mt-2 text-[11px] text-slate-400">Notes: {app.notes}</div>}
-                      </div>
-                    ))}
+                  <div className="text-[11px]">
+                    ATS:{" "}
+                    {typeof app.atsScore !== "undefined"
+                      ? Math.min(
+                          100,
+                          Math.max(0, Number(app.atsScore))
+                        )
+                      : "--"}
+                    /100
                   </div>
                 </div>
-              ))}
-            </div>
-          </section>
-        )}
-      </main>
 
-      <footer className="border-t border-white/10 text-center py-3 text-[11px] text-slate-500">
-        © {new Date().getFullYear()} AI Resume Analyzer • Built with React + Express + MongoDB
-      </footer>
+                {/* Resume PDF link */}
+                {app.resumeUrl ? (
+                  <div className="mt-2">
+                    <a
+                      href={app.resumeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-indigo-300 underline"
+                    >
+                      📄 View Resume (PDF)
+                    </a>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-[10px] text-red-400">
+                    ❌ Resume not available
+                  </div>
+                )}
+
+                {/* Optional resume text */}
+                {app.resumeText && (
+                  <details className="mt-2 text-[11px] text-slate-400">
+                    <summary className="cursor-pointer">
+                      View extracted resume text
+                    </summary>
+                    <div className="mt-1 whitespace-pre-wrap text-slate-300 max-h-40 overflow-y-auto p-2 bg-slate-950/60 rounded">
+                      {app.resumeText}
+                    </div>
+                  </details>
+                )}
+
+                {/* Optional notes */}
+                {app.notes && (
+                  <div className="mt-2 text-[11px] text-slate-400">
+                    Notes: {app.notes}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
-  );
-}
+  </section>
+)}
+
