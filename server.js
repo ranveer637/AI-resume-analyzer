@@ -149,21 +149,16 @@ app.get("/api/jobs", async (_, res) => {
   res.json(await Job.find().sort({ createdAt: -1 }));
 });
 
-app.get("/api/recruiter/jobs", async (req, res) => {
+// Recruiter: get applications grouped by job
+app.get("/api/recruiter/applications", async (req, res) => {
   try {
     const { recruiterEmail } = req.query;
 
     if (!recruiterEmail) {
-      return res.status(400).json({ error: "recruiterEmail is required" });
+      return res.status(400).json({
+        error: "recruiterEmail is required",
+      });
     }
-
-    const jobs = await Job.find({ recruiterEmail }).sort({ createdAt: -1 });
-    res.json(jobs);
-  } catch (err) {
-    console.error("Recruiter jobs error:", err);
-    res.status(500).json({ error: "Failed to fetch recruiter jobs" });
-  }
-});
 
     const jobs = await Job.find({ recruiterEmail }).lean();
 
@@ -174,17 +169,18 @@ app.get("/api/recruiter/jobs", async (req, res) => {
         candidateName: app.candidateName,
         candidateEmail: app.candidateEmail,
         atsScore: app.atsScore,
-        resumeUrl: app.resumeUrl,     // ✅ CRITICAL
-        resumeText: app.resumeText,   // optional
+        resumeUrl: app.resumeUrl,
+        resumeText: app.resumeText,
         appliedAt: app.appliedAt,
         notes: app.notes,
       })),
     }));
 
-    return res.json(response);
+    // ✅ return MUST be inside this function
+    res.json(response);
   } catch (err) {
     console.error("Recruiter applications error:", err);
-    return res.status(500).json({ error: "Failed to fetch applications." });
+    res.status(500).json({ error: "Failed to fetch applications." });
   }
 });
 
