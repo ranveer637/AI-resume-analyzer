@@ -641,46 +641,65 @@ return group.applications.map((app, i) => {
   console.log("RECRUITER APP OBJECT 👉", app);
 
   return (
-    <div key={i} className="border border-white/5 rounded p-2">
-
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <div className="font-semibold">{app.candidateName}</div>
-                                  <div className="text-[11px] text-slate-400">{app.candidateEmail}</div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-[11px]">ATS: {typeof app.atsScore !== 'undefined' ? Math.min(100, Math.max(0, Number(app.atsScore))) : '--'}</div>
-                                  <div className="text-[11px] text-slate-400">{app.appliedAt ? new Date(app.appliedAt).toLocaleString() : ''}</div>
-                                </div>
-                              </div>
-
-                              {app.resumeUrl && (
-                                <div className="mt-2">
-                                  <a href={app.resumeUrl} target="_blank" rel="noreferrer" className="text-[11px] underline">Open resume file</a>
-                                </div>
-                              )}
-
-                              {app.resumeText && (
-                                <details className="mt-2 text-[11px] text-slate-400">
-                                  <summary className="cursor-pointer">View extracted resume text</summary>
-                                  <div className="mt-1 whitespace-pre-wrap text-[11px] text-slate-300 max-h-40 overflow-y-auto p-2 bg-slate-900/60 rounded">{app.resumeText}</div>
-                                </details>
-                              )}
-
-                              {app.notes && (
-                                <div className="mt-2 text-[11px] text-slate-400">Notes: {app.notes}</div>
-                              )}
-                            </div>
-                          ));
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+    <div
+      key={i}
+      className="border border-white/5 rounded p-2 bg-slate-950/70"
+    >
+      {/* Candidate Info */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-semibold">
+            {app.candidateName || "Unnamed Candidate"}
           </div>
-        </section>
+          <div className="text-[11px] text-slate-400">
+            {app.candidateEmail || "No email"}
+          </div>
+        </div>
+
+        <div className="text-right">
+          <div className="text-[11px]">
+            ATS:{" "}
+            {typeof app.atsScore !== "undefined"
+              ? Math.min(100, Math.max(0, Number(app.atsScore)))
+              : "--"}
+            /100
+          </div>
+          {app.appliedAt && (
+            <div className="text-[10px] text-slate-500">
+              {new Date(app.appliedAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Resume Link */}
+      {app.resumeUrl ? (
+        <div className="mt-2">
+          <a
+            href={app.resumeUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[11px] text-indigo-300 underline hover:text-indigo-200"
+          >
+            📄 View Resume (PDF)
+          </a>
+        </div>
+      ) : (
+        <div className="mt-2 text-[10px] text-red-400">
+          ❌ Resume not available
+        </div>
+      )}
+
+      {/* Notes */}
+      {app.notes && (
+        <div className="mt-2 text-[11px] text-slate-400">
+          Notes: {app.notes}
+        </div>
+      )}
+    </div>
+  );
+});
+
 
         {/* RECRUITER: All applications (grouped) - visible only to recruiters */}
         {currentUser?.role === "recruiter" && (
