@@ -85,20 +85,39 @@ export default function App() {
     headers: { "Content-Type": "application/json" },
   }
 );
+app.get("/api/recruiter/applications", async (req, res) => {
+  try {
+    const { recruiterEmail } = req.query;
 
-        const data = await res.json();
-        if (!res.ok) {
-          setAppsError(data.error || "Failed to fetch applications.");
-          return;
-        }
-        setRecruiterApps(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error("Recruiter applications fetch error:", err);
-        setAppsError("Failed to fetch applications.");
-      } finally {
-        setAppsLoading(false);
-      }
-    };
+    if (!recruiterEmail) {
+      return res.status(400).json({
+        error: "recruiterEmail is required",
+      });
+    }
+
+    const jobs = await Job.find({ recruiterEmail }).lean();
+
+    const response = jobs.map((job) => ({
+      jobId: job._id.toString(),
+      jobTitle: job.title,
+      applications: (job.applications || []).map((app) => ({
+        candidateName: app.candidateName,
+        candidateEmail: app.candidateEmail,
+        atsScore: app.atsScore,
+        resumeUrl: app.resumeUrl,     // ✅ CRITICAL
+        resumeText: app.resumeText,   // optional
+        appliedAt: app.appliedAt,
+        notes: app.notes,
+      })),
+    }));
+
+    return res.json(response);
+  } catch (err) {
+    console.error("Recruiter applications error:", err);
+    return res.status(500).json({ error: "Failed to fetch applications." });
+  }
+});
+
 
     loadApplications();
   }, [currentUser]);
