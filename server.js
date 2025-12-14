@@ -149,14 +149,22 @@ app.get("/api/jobs", async (_, res) => {
   res.json(await Job.find().sort({ createdAt: -1 }));
 });
 
-app.get("/api/recruiter/applications", async (req, res) => {
+app.get("/api/recruiter/jobs", async (req, res) => {
   try {
     const { recruiterEmail } = req.query;
 
     if (!recruiterEmail) {
-      return res.status(400).json({
-        error: "recruiterEmail is required",
-      });
+      return res.status(400).json({ error: "recruiterEmail is required" });
+    }
+
+    const jobs = await Job.find({ recruiterEmail }).sort({ createdAt: -1 });
+    res.json(jobs);
+  } catch (err) {
+    console.error("Recruiter jobs error:", err);
+    res.status(500).json({ error: "Failed to fetch recruiter jobs" });
+  }
+});
+
     }
 
     const jobs = await Job.find({ recruiterEmail }).lean();
