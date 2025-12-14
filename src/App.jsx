@@ -628,59 +628,63 @@ const handleApplyToJob = async (jobId) => {
                     {!appsLoading && !appsError && (
                       <div className="space-y-2">
                         {(() => {
-                          // find matching group from recruiterApps
-                          const group =
-  recruiterApps.find((g) => g.jobId === String(job._id)) ||
-  { applications: [] };
+  const group =
+    recruiterApps.find((g) => g.jobId === String(job._id)) ||
+    { applications: [] };
 
-                          if ((group.applications || []).length === 0) {
-                            return <div className="text-xs text-slate-400">No applicants yet for this job.</div>;
-                          }
+  if ((group.applications || []).length === 0) {
+    return (
+      <div className="text-xs text-slate-400">
+        No applicants yet for this job.
+      </div>
+    );
+  }
 
-return group.applications.map((app, i) => (
-  <div
-    key={i}
-    className="border border-white/5 rounded p-2 bg-slate-950/70"
-  >
-    <div className="flex items-center justify-between">
-      <div>
-        <div className="font-semibold">
-          {app.candidateName || "Unnamed Candidate"}
+  return group.applications.map((app, i) => (
+    <div
+      key={i}
+      className="border border-white/5 rounded p-2 bg-slate-950/70"
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-semibold">
+            {app.candidateName || "Unnamed Candidate"}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {app.candidateEmail || "No email"}
+          </div>
         </div>
-        <div className="text-[11px] text-slate-400">
-          {app.candidateEmail || "No email"}
+
+        <div className="text-right">
+          <div className="text-[11px]">
+            ATS:{" "}
+            {typeof app.atsScore !== "undefined"
+              ? Math.min(100, Math.max(0, Number(app.atsScore)))
+              : "--"}
+            /100
+          </div>
         </div>
       </div>
 
-      <div className="text-right">
-        <div className="text-[11px]">
-          ATS:{" "}
-          {typeof app.atsScore !== "undefined"
-            ? Math.min(100, Math.max(0, Number(app.atsScore)))
-            : "--"}
-          /100
+      {app.resumeUrl ? (
+        <div className="mt-2">
+          <a
+            href={app.resumeUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[11px] text-indigo-300 underline"
+          >
+            📄 View Resume (PDF)
+          </a>
         </div>
-      </div>
+      ) : (
+        <div className="mt-2 text-[10px] text-red-400">
+          ❌ Resume not available
+        </div>
+      )}
     </div>
-
-    {app.resumeUrl ? (
-      <div className="mt-2">
-        <a
-          href={app.resumeUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="text-[11px] text-indigo-300 underline"
-        >
-          📄 View Resume (PDF)
-        </a>
-      </div>
-    ) : (
-      <div className="mt-2 text-[10px] text-red-400">
-        ❌ Resume not available
-      </div>
-    )}
-  </div>
-));
+  ));
+})()}
 
 
         {/* RECRUITER: All applications (grouped) - visible only to recruiters */}
