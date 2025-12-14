@@ -165,8 +165,6 @@ app.get("/api/recruiter/jobs", async (req, res) => {
   }
 });
 
-    }
-
     const jobs = await Job.find({ recruiterEmail }).lean();
 
     const response = jobs.map((job) => ({
