@@ -210,6 +210,87 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
   }
 });
 // =====================================================
+//  AUTH ROUTES (DEMO / IN-MEMORY)
+// =====================================================
+const users = [];
+
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { fullName, email, password, role, company } = req.body;
+
+    if (!fullName || !email || !password || !role) {
+      return res.status(400).json({
+        error: "fullName, email, password and role are required",
+      });
+    }
+
+    const existing = users.find((u) => u.email === email);
+    if (existing) {
+      return res.status(409).json({ error: "User already exists" });
+    }
+
+    const user = {
+      id: users.length + 1,
+      fullName,
+      email,
+      password, // demo only (no hashing)
+      role,
+      company: role === "recruiter" ? company || "" : undefined,
+      createdAt: new Date().toISOString(),
+    };
+
+    users.push(user);
+
+    return res.json({
+      message: "Registration successful",
+      token: `mock-token-${user.id}`,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+      },
+    });
+  } catch (err) {
+    console.error("Register error:", err);
+    res.status(500).json({ error: "Registration failed" });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { email, password, role } = req.body;
+
+    const user = users.find((u) => u.email === email);
+    if (!user || user.password !== password) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    if (role && user.role !== role) {
+      return res.status(403).json({
+        error: `Account is registered as ${user.role}`,
+      });
+    }
+
+    return res.json({
+      message: "Login successful",
+      token: `mock-token-${user.id}`,
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+      },
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+
+// =====================================================
 //  LIST ALL JOBS (CANDIDATE – OPEN POSITIONS)
 // =====================================================
 app.get("/api/jobs", async (req, res) => {
