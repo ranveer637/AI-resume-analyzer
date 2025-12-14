@@ -637,12 +637,11 @@ const handleApplyToJob = async (jobId) => {
                             return <div className="text-xs text-slate-400">No applicants yet for this job.</div>;
                           }
 
-                         return group.applications.map((app, i) => {
+return group.applications.map((app, i) => {
   console.log("RECRUITER APP OBJECT 👉", app);
 
   return (
     <div key={i} className="border border-white/5 rounded p-2">
-      ...
 
                               <div className="flex items-center justify-between">
                                 <div>
