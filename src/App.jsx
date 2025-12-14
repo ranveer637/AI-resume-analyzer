@@ -79,9 +79,13 @@ export default function App() {
         // NOTE: backend should expose an endpoint that returns applications grouped by job
         // Example expected response:
         // [ { jobId, jobTitle, applications: [ { candidateName, candidateEmail, atsScore, notes, resumeText, resumeUrl, appliedAt } ] } ]
-        const res = await fetch(apiUrl("/api/recruiter/applications"), {
-          headers: { "Content-Type": "application/json" },
-        });
+        const res = await fetch(
+  apiUrl(`/api/recruiter/applications?recruiterEmail=${currentUser.email}`),
+  {
+    headers: { "Content-Type": "application/json" },
+  }
+);
+
         const data = await res.json();
         if (!res.ok) {
           setAppsError(data.error || "Failed to fetch applications.");
