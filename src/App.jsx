@@ -219,99 +219,68 @@ export default function App() {
       : null;
 
   // -----------------------------------------------------
-  // Candidate applies to a job
   // -----------------------------------------------------
-  const handleApplyToJob = async (jobId) => {
-    if (!currentUser) {
-      alert("Please login as a candidate to apply.");
-      navigate("/login");
-      return;
-    }
+// Candidate applies to a job (FIXED)
+// -----------------------------------------------------
+const handleApplyToJob = async (jobId) => {
+  if (!currentUser) {
+    alert("Please login as a candidate to apply.");
+    navigate("/login");
+    return;
+  }
 
-    if (currentUser.role !== "candidate") {
-      alert("Only candidate accounts can apply to jobs.");
-      return;
-    }
+  if (currentUser.role !== "candidate") {
+    alert("Only candidate accounts can apply to jobs.");
+    return;
+  }
 
-    if (!parsedText && !fileRef.current?.files?.[0]) {
-      const confirmUpload = confirm(
-        "You have not uploaded/analyzed a resume in this session. Apply anyway?"
-      );
-      if (!confirmUpload) return;
-    }
+  if (!parsedText || !parsedText.trim()) {
+    alert("Please upload your resume first.");
+    return;
+  }
 
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
 
-      // If user uploaded a raw resume file, send it as multipart/form-data so backend can store it directly.
-      if (fileRef.current?.files?.[0]) {
-        const fd = new FormData();
-        fd.append("file", fileRef.current.files[0]);
-        fd.append("candidateName", currentUser.fullName);
-        fd.append("candidateEmail", currentUser.email);
-        fd.append("atsScore", atsDisplay ?? "");
-        fd.append("notes", "Applied via AI Resume Analyzer");
-        // include parsed text as well (optional)
-        if (parsedText) fd.append("resumeText", parsedText);
+    const body = {
+      candidateName: currentUser.fullName,   // ✅ REQUIRED
+      candidateEmail: currentUser.email,     // ✅ REQUIRED
+      atsScore: atsDisplay ?? null,
+      resumeText: parsedText,                // ✅ BACKEND USES THIS TO CREATE PDF
+      notes: "Applied via AI Resume Analyzer",
+    };
 
-        const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
-          method: "POST",
-          body: fd,
-        });
+    const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-        const data = await res.json();
-        if (!res.ok) {
-          setApplyStatus((prev) => ({
-            ...prev,
-            [jobId]: data.error || "Failed to apply.",
-          }));
-          return;
-        }
+    const data = await res.json();
 
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: "✅ Application submitted!",
-        }));
-      } else {
-        // No file uploaded: send JSON with resumeText. Backend will generate a PDF from this text and return a resumeUrl.
-        const body = {
-          candidateName: currentUser.fullName,
-          candidateEmail: currentUser.email,
-          atsScore: atsDisplay ?? undefined,
-          notes: "Applied via AI Resume Analyzer",
-          resumeText: parsedText || undefined,
-        };
-
-        const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          setApplyStatus((prev) => ({
-            ...prev,
-            [jobId]: data.error || "Failed to apply.",
-          }));
-          return;
-        }
-
-        setApplyStatus((prev) => ({
-          ...prev,
-          [jobId]: "✅ Application submitted!",
-        }));
-      }
-    } catch (err) {
-      console.error("Apply error:", err);
+    if (!res.ok) {
       setApplyStatus((prev) => ({
         ...prev,
-        [jobId]: "Failed to apply. Please try again.",
+        [jobId]: data.error || "Failed to apply.",
       }));
-    } finally {
-      setLoading(false);
+      return;
     }
-  };
+
+    setApplyStatus((prev) => ({
+      ...prev,
+      [jobId]: "✅ Application submitted!",
+    }));
+  } catch (err) {
+    console.error("Apply error:", err);
+    setApplyStatus((prev) => ({
+      ...prev,
+      [jobId]: "Failed to apply. Please try again.",
+    }));
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // Helper: toggle selected job in recruiter view
   const toggleSelectJob = (jobId) => {
