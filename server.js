@@ -302,6 +302,63 @@ app.get("/api/jobs", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
 });
+// =====================================================
+//  RECRUITER JOB ROUTES
+// =====================================================
+
+// Create a job (Recruiter)
+app.post("/api/recruiter/jobs", async (req, res) => {
+  try {
+    const {
+      title,
+      companyName,
+      location,
+      qualifications,
+      description,
+      recruiterEmail,
+    } = req.body;
+
+    if (!title || !companyName || !qualifications || !recruiterEmail) {
+      return res.status(400).json({
+        error: "title, companyName, qualifications and recruiterEmail are required",
+      });
+    }
+
+    const job = await Job.create({
+      title,
+      companyName,
+      location: location || "Not specified",
+      qualifications,
+      description: description || "",
+      recruiterEmail,
+    });
+
+    res.json({ message: "Job created successfully", job });
+  } catch (err) {
+    console.error("Create job error:", err);
+    res.status(500).json({ error: "Failed to create job" });
+  }
+});
+
+// Fetch jobs created by recruiter
+app.get("/api/recruiter/jobs", async (req, res) => {
+  try {
+    const { recruiterEmail } = req.query;
+
+    if (!recruiterEmail) {
+      return res.status(400).json({ error: "recruiterEmail is required" });
+    }
+
+    const jobs = await Job.find({ recruiterEmail })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json(jobs);
+  } catch (err) {
+    console.error("Fetch recruiter jobs error:", err);
+    res.status(500).json({ error: "Failed to fetch recruiter jobs" });
+  }
+});
 
 
 // =====================================================
