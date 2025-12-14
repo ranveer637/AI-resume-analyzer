@@ -209,6 +209,19 @@ app.post("/api/analyze", upload.single("file"), async (req, res) => {
     return res.status(500).json({ error: "Analysis failed" });
   }
 });
+// =====================================================
+//  LIST ALL JOBS (CANDIDATE – OPEN POSITIONS)
+// =====================================================
+app.get("/api/jobs", async (req, res) => {
+  try {
+    const jobs = await Job.find().sort({ createdAt: -1 }).lean();
+    res.json(jobs);
+  } catch (err) {
+    console.error("Fetch jobs error:", err);
+    res.status(500).json({ error: "Failed to fetch jobs" });
+  }
+});
+
 
 // =====================================================
 //  SERVE FRONTEND (RENDER FIX)
