@@ -281,6 +281,55 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
     res.status(500).json({ error: "Apply failed" });
   }
 });
+// =====================================================
+//  PARSE RESUME (USED BY App.jsx)
+// =====================================================
+app.post("/api/parse", upload.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ error: "No file uploaded" });
+  }
+
+  const filePath = file.path;
+  const originalName = file.originalname.toLowerCase();
+
+  try {
+    let text = "";
+
+    if (originalName.endsWith(".pdf")) {
+      const buffer = fs.readFileSync(filePath);
+      text = await safeParsePdfBuffer(buffer);
+    } else if (originalName.endsWith(".docx")) {
+      text = (await mammoth.extractRawText({ path: filePath })).value || "";
+    } else if (originalName.endsWith(".txt")) {
+      text = fs.readFileSync(filePath, "utf8");
+    }
+
+    safeUnlink(filePath);
+
+    if (!text || !text.trim()) {
+      return res.json({
+        text: "",
+        keywords: [],
+        skillsFound: [],
+        topTokens: [],
+        message: "No extractable text found",
+      });
+    }
+
+    return res.json({
+      text,
+      keywords: [],
+      skillsFound: [],
+      topTokens: [],
+    });
+  } catch (err) {
+    console.error("Parse error:", err);
+    safeUnlink(filePath);
+    res.status(500).json({ error: "Failed to parse resume" });
+  }
+});
+
 
 /* -------------------------------------------------- */
 /*  STATIC FRONTEND (RENDER FIX)                      */
