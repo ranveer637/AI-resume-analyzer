@@ -282,7 +282,8 @@ app.post("/api/jobs/:jobId/apply", upload.single("file"), async (req, res) => {
   }
 });
 // =====================================================
-//  PARSE RESUME (USED BY App.jsx)
+// =====================================================
+//  PARSE RESUME + EXTRACT KEYWORDS (FOR UI)
 // =====================================================
 app.post("/api/parse", upload.single("file"), async (req, res) => {
   const file = req.file;
@@ -297,8 +298,7 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
     let text = "";
 
     if (originalName.endsWith(".pdf")) {
-      const buffer = fs.readFileSync(filePath);
-      text = await safeParsePdfBuffer(buffer);
+      text = await safeParsePdfBuffer(fs.readFileSync(filePath));
     } else if (originalName.endsWith(".docx")) {
       text = (await mammoth.extractRawText({ path: filePath })).value || "";
     } else if (originalName.endsWith(".txt")) {
@@ -317,11 +317,29 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
       });
     }
 
+    // ---------- KEYWORD EXTRACTION ----------
+    const tokens = text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+
+    const freq = {};
+    tokens.forEach((t) => {
+      freq[t] = (freq[t] || 0) + 1;
+    });
+
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+
+    const keywords = sorted.slice(0, 20).map(([w]) => w);
+    const skillsFound = keywords.slice(0, 10);
+    const topTokens = keywords.slice(0, 15);
+
     return res.json({
       text,
-      keywords: [],
-      skillsFound: [],
-      topTokens: [],
+      keywords,
+      skillsFound,
+      topTokens,
     });
   } catch (err) {
     console.error("Parse error:", err);
@@ -329,6 +347,7 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
     res.status(500).json({ error: "Failed to parse resume" });
   }
 });
+
 // =====================================================
 //  ANALYZE RESUME (ATS + AI FEEDBACK)
 // =====================================================
