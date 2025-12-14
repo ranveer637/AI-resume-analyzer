@@ -329,6 +329,88 @@ app.post("/api/parse", upload.single("file"), async (req, res) => {
     res.status(500).json({ error: "Failed to parse resume" });
   }
 });
+// =====================================================
+//  ANALYZE RESUME (ATS + AI FEEDBACK)
+// =====================================================
+app.post("/api/analyze", upload.single("file"), async (req, res) => {
+  let filePath;
+  try {
+    let text = "";
+
+    if (req.file) {
+      filePath = req.file.path;
+      const name = req.file.originalname.toLowerCase();
+
+      if (name.endsWith(".pdf")) {
+        text = await safeParsePdfBuffer(fs.readFileSync(filePath));
+      } else if (name.endsWith(".docx")) {
+        text = (await mammoth.extractRawText({ path: filePath })).value || "";
+      } else {
+        text = fs.readFileSync(filePath, "utf8");
+      }
+      safeUnlink(filePath);
+    } else if (req.body.text) {
+      text = String(req.body.text);
+    } else {
+      return res.status(400).json({ error: "No resume text provided" });
+    }
+
+    if (!text || text.trim().length < 20) {
+      return res.json({
+        atsScore: 30,
+        topSkills: [],
+        suggestions: ["Resume text is too short"],
+        rewrittenBullets: [],
+        keywords: [],
+        skillsFound: [],
+        topTokens: [],
+      });
+    }
+
+    // ---- SIMPLE KEYWORD EXTRACTION ----
+    const tokens = text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+
+    const freq = {};
+    tokens.forEach((t) => (freq[t] = (freq[t] || 0) + 1));
+
+    const keywords = Object.entries(freq)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([k]) => k);
+
+    // ---- ATS SCORE (HEURISTIC) ----
+    let atsScore = 40;
+    if (text.length > 500) atsScore += 10;
+    if (keywords.length > 5) atsScore += 10;
+    if (keywords.length > 10) atsScore += 10;
+    atsScore = Math.min(95, atsScore);
+
+    // ---- MOCK AI FEEDBACK (SAFE FALLBACK) ----
+    return res.json({
+      atsScore,
+      topSkills: keywords.slice(0, 5),
+      suggestions: [
+        "Add measurable achievements",
+        "Improve resume summary",
+        "Highlight technical skills clearly",
+      ],
+      rewrittenBullets: [
+        "Improved system performance by optimizing backend APIs.",
+      ],
+      keywords,
+      skillsFound: keywords,
+      topTokens: keywords,
+    });
+  } catch (err) {
+    console.error("Analyze error:", err);
+    safeUnlink(filePath);
+    return res.status(500).json({ error: "Analysis failed" });
+  }
+});
 
 
 /* -------------------------------------------------- */
