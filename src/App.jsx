@@ -627,7 +627,10 @@ export default function App() {
                       <div className="space-y-2">
                         {(() => {
                           // find matching group from recruiterApps
-                          const group = recruiterApps.find((g) => g.jobId === job._id) || { applications: [] };
+                         const group =
+  recruiterApps.find((g) => g.jobId === String(job._id)) ||
+  { applications: [] };
+
                           if ((group.applications || []).length === 0) {
                             return <div className="text-xs text-slate-400">No applicants yet for this job.</div>;
                           }
