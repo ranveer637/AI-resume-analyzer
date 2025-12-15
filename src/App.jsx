@@ -648,11 +648,21 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {app.resumeUrl && (
-                                <div className="mt-2">
-                                  <a href={app.resumeUrl} target="_blank" rel="noreferrer" className="text-[11px] underline">Open resume file</a>
-                                </div>
-                              )}
+                             {app.resumeUrl ? (
+  <a
+    href={app.resumeUrl}
+    target="_blank"
+    rel="noreferrer"
+    className="text-indigo-300 underline text-xs"
+  >
+    📄 View Resume (PDF)
+  </a>
+) : (
+  <span className="text-red-400 text-xs">
+    Resume missing
+  </span>
+)}
+
 
                               {app.resumeText && (
                                 <details className="mt-2 text-[11px] text-slate-400">
