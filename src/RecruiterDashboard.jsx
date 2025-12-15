@@ -354,10 +354,58 @@ export default function RecruiterDashboard() {
                       </summary>
                       <div className="mt-2 space-y-1">
                         {job.applications.map((app, idx) => (
-                          <div
-                            key={idx}
-                            className="border border-white/10 rounded-lg px-2 py-1.5 bg-slate-900/80"
-                          >
+                         <div
+  key={idx}
+  className="border border-white/10 rounded-lg px-2 py-2 bg-slate-900/80 space-y-1"
+>
+  <div className="flex items-center justify-between">
+    <div>
+      <div className="font-semibold text-[11px]">
+        {app.candidateName || "Unnamed Candidate"}
+      </div>
+      <div className="text-[10px] text-slate-400">
+        {app.candidateEmail}
+      </div>
+    </div>
+
+    <div className="text-right text-[10px] text-slate-400">
+      <div>
+        {app.atsScore != null
+          ? `ATS: ${app.atsScore}/100`
+          : "ATS: N/A"}
+      </div>
+      <div>
+        {app.appliedAt
+          ? new Date(app.appliedAt).toLocaleDateString()
+          : ""}
+      </div>
+    </div>
+  </div>
+
+  {/* ✅ RESUME LINK */}
+  {app.resumeUrl ? (
+    <a
+      href={app.resumeUrl}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-block text-[10px] text-indigo-300 underline"
+    >
+      📄 View Resume (PDF)
+    </a>
+  ) : (
+    <div className="text-[10px] text-red-400">
+      ❌ Resume not available
+    </div>
+  )}
+
+  {/* Optional notes */}
+  {app.notes && (
+    <div className="text-[10px] text-slate-300">
+      {app.notes}
+    </div>
+  )}
+</div>
+
                             <div className="flex items-center justify-between">
                               <div>
                                 <div className="font-semibold text-[11px]">
