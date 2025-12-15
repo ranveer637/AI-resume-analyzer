@@ -562,73 +562,72 @@ export default function App() {
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {jobs.map((job) => (
-              <div
-                key={job._id}
-                className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2"
-              >
-                <div>
-                  <h3 className="text-sm font-semibold">
-                    {job.title} {" "}
-                    <span className="text-[11px] text-slate-400">
-                      • {job.companyName}
-                    </span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    {job.location || "Not specified"}
-                  </p>
-                </div>
+            {jobs.map((job) => {
+              const group =
+                recruiterApps.find((g) => g.jobId === String(job._id)) ||
+                { applications: [] };
 
-                <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
-                  <strong>Required qualifications:</strong> {job.qualifications}
-                </div>
-
-                {job.description && (
-                  <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">
-                    {job.description}
+              return (
+                <div
+                  key={job._id}
+                  className="rounded-xl border border-white/10 bg-slate-950/60 p-4 flex flex-col gap-2"
+                >
+                  <div>
+                    <h3 className="text-sm font-semibold">
+                      {job.title}{" "}
+                      <span className="text-[11px] text-slate-400">
+                        • {job.companyName}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      {job.location || "Not specified"}
+                    </p>
                   </div>
-                )}
 
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    onClick={() => handleApplyToJob(job._id)}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
-                  >
-                    Apply with this resume
-                  </button>
+                  <div className="text-[11px] text-slate-300 line-clamp-3 whitespace-pre-wrap">
+                    <strong>Required qualifications:</strong> {job.qualifications}
+                  </div>
 
-                  {currentUser?.role === "recruiter" && (
-                    <button
-                      onClick={() => toggleSelectJob(job._id)}
-                      className="px-3 py-1.5 rounded-lg border border-slate-600 text-[11px]"
-                    >
-                      {selectedJobForView === job._id ? "Hide Applicants" : "View Applicants"}
-                    </button>
+                  {job.description && (
+                    <div className="text-[11px] text-slate-400 line-clamp-3 whitespace-pre-wrap">
+                      {job.description}
+                    </div>
                   )}
-                </div>
 
-                {applyStatus[job._id] && (
-                  <p className="text-[11px] mt-1 text-emerald-300">
-                    {applyStatus[job._id]}
-                  </p>
-                )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={() => handleApplyToJob(job._id)}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-[11px] font-semibold self-start"
+                    >
+                      Apply with this resume
+                    </button>
 
-                {/* If recruiter clicked "View Applicants" show inline list for that job */}
-                
+                    {currentUser?.role === "recruiter" && (
+                      <button
+                        onClick={() => toggleSelectJob(job._id)}
+                        className="px-3 py-1.5 rounded-lg border border-slate-600 text-[11px]"
+                      >
+                        {selectedJobForView === job._id ? "Hide Applicants" : "View Applicants"}
+                      </button>
+                    )}
+                  </div>
 
-                    {!appsLoading && !appsError && (
+                  {applyStatus[job._id] && (
+                    <p className="text-[11px] mt-1 text-emerald-300">
+                      {applyStatus[job._id]}
+                    </p>
+                  )}
+
+                  {/* If recruiter clicked "View Applicants" show inline list for that job */}
+                  {currentUser?.role === "recruiter" &&
+                    selectedJobForView === job._id &&
+                    !appsLoading &&
+                    !appsError && (
                       <div className="space-y-2">
-                        {(() => {
-                          // find matching group from recruiterApps
-                         const group =
-  recruiterApps.find((g) => g.jobId === String(job._id)) ||
-  { applications: [] };
-
-                          if ((group.applications || []).length === 0) {
-                            return <div className="text-xs text-slate-400">No applicants yet for this job.</div>;
-                          }
-
-                          return group.applications.map((app, i) => (
+                        {(group.applications || []).length === 0 ? (
+                          <div className="text-xs text-slate-400">No applicants yet for this job.</div>
+                        ) : (
+                          group.applications.map((app, i) => (
                             <div key={i} className="border border-white/5 rounded p-2 bg-slate-950/70">
                               <div className="flex items-center justify-between">
                                 <div>
@@ -641,21 +640,20 @@ export default function App() {
                                 </div>
                               </div>
 
-                             {app.resumeUrl ? (
-  <a
-    href={app.resumeUrl}
-    target="_blank"
-    rel="noreferrer"
-    className="text-indigo-300 underline text-xs"
-  >
-    📄 View Resume (PDF)
-  </a>
-) : (
-  <span className="text-red-400 text-xs">
-    Resume missing
-  </span>
-)}
-
+                              {app.resumeUrl ? (
+                                <a
+                                  href={app.resumeUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-indigo-300 underline text-xs"
+                                >
+                                  📄 View Resume (PDF)
+                                </a>
+                              ) : (
+                                <span className="text-red-400 text-xs">
+                                  Resume missing
+                                </span>
+                              )}
 
                               {app.resumeText && (
                                 <details className="mt-2 text-[11px] text-slate-400">
@@ -668,14 +666,13 @@ export default function App() {
                                 <div className="mt-2 text-[11px] text-slate-400">Notes: {app.notes}</div>
                               )}
                             </div>
-                          ));
-                        })()}
+                          ))
+                        )}
                       </div>
                     )}
-                  </div>
-                )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </section>
 
