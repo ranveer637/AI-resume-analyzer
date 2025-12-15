@@ -299,10 +299,20 @@ app.get("/api/recruiter/jobs", async (req, res) => {
 /* STATIC FRONTEND (RENDER FIX) */
 /* -------------------------------------------------- */
 const DIST = path.join(__dirname, "dist");
+
 if (fs.existsSync(DIST)) {
   app.use(express.static(DIST));
-  app.get("*", (_, res) => res.sendFile(path.join(DIST, "index.html")));
+
+  app.get("*", (req, res) => {
+    // 🚫 DO NOT let React catch resume PDFs
+    if (req.path.startsWith("/resumes")) {
+      return res.status(404).end();
+    }
+
+    res.sendFile(path.join(DIST, "index.html"));
+  });
 }
+
 
 /* -------------------------------------------------- */
 /* START */
