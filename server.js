@@ -19,6 +19,7 @@ dotenv.config();
 /* -------------------------------------------------- */
 /* BASIC SETUP */
 /* -------------------------------------------------- */
+const BASE_URL = process.env.BASE_URL || "";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -201,7 +202,7 @@ app.post("/api/jobs/:jobId/apply", async (req, res) => {
 
   if (resumeText) {
     const pdfName = await generatePdf(resumeText, candidateEmail);
-    resumeUrl = `${req.protocol}://${req.get("host")}/resumes/${pdfName}`;
+ resumeUrl = `${BASE_URL}/resumes/${pdfName}`;
   }
 
   job.applications.push({
