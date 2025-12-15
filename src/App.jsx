@@ -1,4 +1,3 @@
-
 // src/App.jsx
 import React, { useState, useRef, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -69,38 +68,37 @@ export default function App() {
   }, []); // run once
 
   // If user is recruiter, load applications grouped by job
-  // If user is recruiter, load applications grouped by job
-useEffect(() => {
-  if (!currentUser || currentUser.role !== "recruiter") return;
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "recruiter") return;
 
-  const loadApplications = async () => {
-    try {
-      setAppsLoading(true);
-      setAppsError("");
+    const loadApplications = async () => {
+      try {
+        setAppsLoading(true);
+        setAppsError("");
 
-      const res = await fetch(
-        apiUrl(`/api/recruiter/applications?recruiterEmail=${currentUser.email}`),
-        { headers: { "Content-Type": "application/json" } }
-      );
+        const res = await fetch(
+          apiUrl(`/api/recruiter/applications?recruiterEmail=${currentUser.email}`),
+          { headers: { "Content-Type": "application/json" } }
+        );
 
-      const data = await res.json();
+        const data = await res.json();
 
-      if (!res.ok) {
-        setAppsError(data.error || "Failed to fetch applications.");
-        return;
+        if (!res.ok) {
+          setAppsError(data.error || "Failed to fetch applications.");
+          return;
+        }
+
+        setRecruiterApps(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("Recruiter applications fetch error:", err);
+        setAppsError("Failed to fetch applications.");
+      } finally {
+        setAppsLoading(false);
       }
+    };
 
-      setRecruiterApps(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Recruiter applications fetch error:", err);
-      setAppsError("Failed to fetch applications.");
-    } finally {
-      setAppsLoading(false);
-    }
-  };
-
-  loadApplications();
-}, [currentUser]);
+    loadApplications();
+  }, [currentUser]);
 
 
   const handleLogout = () => {
@@ -224,66 +222,66 @@ useEffect(() => {
 
   // -----------------------------------------------------
   // -----------------------------------------------------
-// Candidate applies to a job (FIXED)
-// -----------------------------------------------------
-const handleApplyToJob = async (jobId) => {
-  if (!currentUser) {
-    alert("Please login as a candidate to apply.");
-    navigate("/login");
-    return;
-  }
-
-  if (currentUser.role !== "candidate") {
-    alert("Only candidate accounts can apply to jobs.");
-    return;
-  }
-
-  if (!parsedText || !parsedText.trim()) {
-    alert("Please upload your resume first.");
-    return;
-  }
-
-  try {
-    setLoading(true);
-
-    const body = {
-      candidateName: currentUser.fullName,   // ✅ REQUIRED
-      candidateEmail: currentUser.email,     // ✅ REQUIRED
-      atsScore: atsDisplay ?? null,
-      resumeText: parsedText,                // ✅ BACKEND USES THIS TO CREATE PDF
-      notes: "Applied via AI Resume Analyzer",
-    };
-
-    const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      setApplyStatus((prev) => ({
-        ...prev,
-        [jobId]: data.error || "Failed to apply.",
-      }));
+  // Candidate applies to a job (FIXED)
+  // -----------------------------------------------------
+  const handleApplyToJob = async (jobId) => {
+    if (!currentUser) {
+      alert("Please login as a candidate to apply.");
+      navigate("/login");
       return;
     }
 
-    setApplyStatus((prev) => ({
-      ...prev,
-      [jobId]: "✅ Application submitted!",
-    }));
-  } catch (err) {
-    console.error("Apply error:", err);
-    setApplyStatus((prev) => ({
-      ...prev,
-      [jobId]: "Failed to apply. Please try again.",
-    }));
-  } finally {
-    setLoading(false);
-  }
-};
+    if (currentUser.role !== "candidate") {
+      alert("Only candidate accounts can apply to jobs.");
+      return;
+    }
+
+    if (!parsedText || !parsedText.trim()) {
+      alert("Please upload your resume first.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const body = {
+        candidateName: currentUser.fullName,   // ✅ REQUIRED
+        candidateEmail: currentUser.email,     // ✅ REQUIRED
+        atsScore: atsDisplay ?? null,
+        resumeText: parsedText,                // ✅ BACKEND USES THIS TO CREATE PDF
+        notes: "Applied via AI Resume Analyzer",
+      };
+
+      const res = await fetch(apiUrl(`/api/jobs/${jobId}/apply`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setApplyStatus((prev) => ({
+          ...prev,
+          [jobId]: data.error || "Failed to apply.",
+        }));
+        return;
+      }
+
+      setApplyStatus((prev) => ({
+        ...prev,
+        [jobId]: "✅ Application submitted!",
+      }));
+    } catch (err) {
+      console.error("Apply error:", err);
+      setApplyStatus((prev) => ({
+        ...prev,
+        [jobId]: "Failed to apply. Please try again.",
+      }));
+    } finally {
+      setLoading(false);
+    }
+  };
 
 
   // Helper: toggle selected job in recruiter view
