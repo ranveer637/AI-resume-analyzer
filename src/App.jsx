@@ -614,14 +614,7 @@ export default function App() {
                 )}
 
                 {/* If recruiter clicked "View Applicants" show inline list for that job */}
-                {currentUser?.role === "recruiter" && selectedJobForView === job._id && (
-                  <div className="mt-3 bg-slate-900/60 border border-white/5 rounded p-3 text-xs">
-                    <h4 className="font-semibold mb-2">Applicants</h4>
-
-                    {appsLoading && <div>Loading applications...</div>}
-                    {appsError && (
-                      <div className="text-red-300">{appsError}</div>
-                    )}
+                
 
                     {!appsLoading && !appsError && (
                       <div className="space-y-2">
