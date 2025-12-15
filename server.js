@@ -19,7 +19,9 @@ dotenv.config();
 /* -------------------------------------------------- */
 /* BASIC SETUP */
 /* -------------------------------------------------- */
-const BASE_URL = process.env.BASE_URL || "";
+const BASE_URL =
+  process.env.PUBLIC_BACKEND_URL ||
+  "https://ai-resume-analyzer-3bfr.onrender.com";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
