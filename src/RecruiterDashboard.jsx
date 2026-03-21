@@ -152,13 +152,25 @@ export default function RecruiterDashboard() {
             >
               Analyzer
             </Link>
-            {currentUser && (
-              <span className="hidden sm:inline text-[11px] text-slate-300 mr-1">
-                {currentUser.company
-                  ? `${currentUser.company}`
-                  : currentUser.fullName}
-              </span>
-            )}
+           {currentUser && (
+  <span className="hidden sm:inline text-[11px] text-slate-300 mr-1 flex items-center gap-1">
+    {currentUser.company
+      ? `${currentUser.company}`
+      : currentUser.fullName}
+
+    {currentUser.verificationStatus === "verified" && (
+      <span className="bg-blue-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">
+        ✔
+      </span>
+    )}
+
+    {currentUser.verificationStatus === "pending" && (
+      <span className="bg-yellow-400 text-black px-1.5 py-0.5 rounded-full text-[10px]">
+        ⏳
+      </span>
+    )}
+  </span>
+)}
             <button
               onClick={handleLogout}
               className="px-3 py-1.5 rounded-lg border border-rose-500/70 text-rose-200 hover:bg-rose-500/10"
@@ -277,9 +289,15 @@ export default function RecruiterDashboard() {
                 />
               </div>
 
+              {currentUser?.verificationStatus !== "verified" && (
+  <p className="text-red-400 text-[11px]">
+    Only verified recruiters can post jobs
+  </p>
+)}
+
               <button
                 type="submit"
-                disabled={creatingJob}
+                disabled={creatingJob || currentUser?.verificationStatus !== "verified"}
                 className="w-full mt-1 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-xs font-semibold"
               >
                 {creatingJob ? "Posting..." : "Post job"}
