@@ -158,6 +158,49 @@ export default function RecruiterDashboard() {
       ? `${currentUser.company}`
       : currentUser.fullName}
 
+    {currentUser?.verificationStatus === "unverified" && (
+  <button
+    onClick={async () => {
+      try {
+        const res = await fetch("/api/recruiter/request-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: currentUser.email }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          alert(data.error || "Failed to request verification");
+          return;
+        }
+
+        alert("Verification request sent!");
+
+        // update UI instantly
+        setCurrentUser({
+          ...currentUser,
+          verificationStatus: "pending",
+        });
+
+        localStorage.setItem(
+          "user",
+          JSON.stringify({
+            ...currentUser,
+            verificationStatus: "pending",
+          })
+        );
+      } catch (err) {
+        console.error(err);
+        alert("Error sending request");
+      }
+    }}
+    className="ml-2 px-2 py-1 text-[10px] bg-yellow-500 text-black rounded"
+  >
+    Request Verification
+  </button>
+)}
+
     {currentUser.verificationStatus === "verified" && (
       <span className="bg-blue-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">
         ✔
