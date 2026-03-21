@@ -55,14 +55,16 @@ mongoose
 /* -------------------------------------------------- */
 const UserSchema = new mongoose.Schema({
   fullName: String,
-  email: String,
+  email: { type: String, unique: true },
   password: String,
   role: String,
   company: String,
   verificationStatus: {
     type: String,
+    enum: ["unverified", "pending", "verified"],
     default: "unverified"
-  }
+  },
+  createdAt: { type: Date, default: Date.now }
 });
 
 const User = mongoose.model("User", UserSchema);
@@ -138,45 +140,60 @@ function generatePdf(text, email) {
 /* -------------------------------------------------- */
 /* AUTH (DEMO) */
 /* -------------------------------------------------- */
-const users = [];
 
-app.post("/api/auth/register", (req, res) => {
-  const { fullName, email, password, role } = req.body;
-  if (!fullName || !email || !password || !role)
+app.post("/api/auth/register", async (req, res) => {
+  const { fullName, email, password, role, company } = req.body;
+
+  if (!fullName || !email || !password || !role) {
     return res.status(400).json({ error: "Missing fields" });
+  }
 
- const user = await User.create({
-  fullName,
-  email,
-  password,
-  role,
-  company: req.body.company || "",
-  verificationStatus: role === "recruiter" ? "unverified" : "verified"
-});
+  try {
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ error: "User already exists" });
+    }
 
-res.json({ user });
-  
-app.post("/api/auth/login", (req, res) => {
-  const u = await User.findOne({ email: req.body.email });
+    const user = await User.create({
+      fullName,
+      email,
+      password,
+      role,
+      company,
+      verificationStatus: role === "recruiter" ? "unverified" : "verified"
+    });
 
-if (!u || u.password !== req.body.password) {
-  return res.status(401).json({ error: "Invalid credentials" });
-}
-
-res.json({ user: u });
-  
-  if (!u || u.password !== req.body.password)
-    return res.status(401).json({ error: "Invalid credentials" });
-
-  res.json({
-  user: {
-    fullName: u.fullName,
-    email: u.email,
-    role: u.role,
-    verificationStatus: u.verificationStatus
+    res.json({ user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Registration failed" });
   }
 });
+  
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user || user.password !== password) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    res.json({
+      user: {
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        company: user.company,
+        verificationStatus: user.verificationStatus
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Login failed" });
+  }
 });
+
 
 app.post("/api/recruiter/request-verification", async (req, res) => {
   const { email } = req.body;
@@ -193,18 +210,17 @@ app.post("/api/recruiter/request-verification", async (req, res) => {
   res.json({ message: "Verification request sent" });
 });
 
-app.post("/api/admin/verify-recruiter", (req, res) => {
+app.post("/api/admin/verify-recruiter", async (req, res) => {
   const { email } = req.body;
 
-  const user = users.find(
-    (u) => u.email === email && u.role === "recruiter"
-  );
+  const user = await User.findOne({ email });
 
   if (!user) {
-    return res.status(404).json({ error: "Recruiter not found" });
+    return res.status(404).json({ error: "User not found" });
   }
 
   user.verificationStatus = "verified";
+  await user.save();
 
   res.json({ message: "Recruiter verified ✅" });
 });
