@@ -131,7 +131,13 @@ app.post("/api/auth/register", (req, res) => {
   if (!fullName || !email || !password || !role)
     return res.status(400).json({ error: "Missing fields" });
 
-  users.push({ fullName, email, password, role });
+  users.push({
+  fullName,
+  email,
+  password,
+  role,
+  verificationStatus: role === "recruiter" ? "unverified" : "verified"
+});
   res.json({ user: { fullName, email, role } });
 });
 
@@ -140,15 +146,87 @@ app.post("/api/auth/login", (req, res) => {
   if (!u || u.password !== req.body.password)
     return res.status(401).json({ error: "Invalid credentials" });
 
-  res.json({ user: u });
+  res.json({
+  user: {
+    fullName: u.fullName,
+    email: u.email,
+    role: u.role,
+    verificationStatus: u.verificationStatus
+  }
+});
 });
 
+app.post("/api/recruiter/request-verification", (req, res) => {
+  const { email } = req.body;
+
+  const user = users.find(u => u.email === email && u.role === "recruiter");
+
+  if (!user) {
+    return res.status(404).json({ error: "Recruiter not found" });
+  }
+
+  user.verificationStatus = "pending";
+
+  res.json({ message: "Verification request sent" });
+});
+
+app.post("/api/admin/verify-recruiter", (req, res) => {
+  const { email } = req.body;
+
+  const user = users.find(u => u.email === email && u.role === "recruiter");
+
+  if (!user) {
+    return res.status(404).json({ error: "Recruiter not found" });
+  }
+
+  user.verificationStatus = "verified";
+
+  res.json({ message: "Recruiter verified ✅" });
+});
+
+app.post("/api/admin/verify-recruiter", (req, res) => {
+  const { email } = req.body;
+
+  const user = users.find(u => u.email === email && u.role === "recruiter");
+
+  if (!user) {
+    return res.status(404).json({ error: "Recruiter not found" });
+  }
+
+  user.verificationStatus = "verified";
+
+  res.json({ message: "Recruiter verified ✅" });
+});
 /* -------------------------------------------------- */
 /* JOB ROUTES */
 /* -------------------------------------------------- */
 app.post("/api/recruiter/jobs", async (req, res) => {
+  const { recruiterEmail } = req.body;
+
+  const user = users.find(u => u.email === recruiterEmail);
+
+  if (!user || user.verificationStatus !== "verified") {
+    return res.status(403).json({
+      error: "Only verified recruiters can post jobs"
+    });
+  }
+
   const job = await Job.create(req.body);
   res.json(job);
+});
+
+app.get("/api/recruiter/profile", (req, res) => {
+  const { email } = req.query;
+
+  const user = users.find(u => u.email === email);
+
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  res.json({
+    fullName: user.fullName,
+    email: user.email,
+    verificationStatus: user.verificationStatus
+  });
 });
 
 app.get("/api/jobs", async (_, res) => {
