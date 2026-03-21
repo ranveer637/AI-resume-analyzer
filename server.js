@@ -53,6 +53,20 @@ mongoose
 /* -------------------------------------------------- */
 /* SCHEMAS */
 /* -------------------------------------------------- */
+const UserSchema = new mongoose.Schema({
+  fullName: String,
+  email: String,
+  password: String,
+  role: String,
+  company: String,
+  verificationStatus: {
+    type: String,
+    default: "unverified"
+  }
+});
+
+const User = mongoose.model("User", UserSchema);
+
 const ApplicationSchema = new mongoose.Schema(
   {
     candidateName: String,
@@ -131,18 +145,26 @@ app.post("/api/auth/register", (req, res) => {
   if (!fullName || !email || !password || !role)
     return res.status(400).json({ error: "Missing fields" });
 
-  users.push({
+ const user = await User.create({
   fullName,
   email,
   password,
   role,
+  company: req.body.company || "",
   verificationStatus: role === "recruiter" ? "unverified" : "verified"
 });
-  res.json({ user: { fullName, email, role } });
-});
 
+res.json({ user });
+  
 app.post("/api/auth/login", (req, res) => {
-  const u = users.find((x) => x.email === req.body.email);
+  const u = await User.findOne({ email: req.body.email });
+
+if (!u || u.password !== req.body.password) {
+  return res.status(401).json({ error: "Invalid credentials" });
+}
+
+res.json({ user: u });
+  
   if (!u || u.password !== req.body.password)
     return res.status(401).json({ error: "Invalid credentials" });
 
@@ -156,16 +178,17 @@ app.post("/api/auth/login", (req, res) => {
 });
 });
 
-app.post("/api/recruiter/request-verification", (req, res) => {
+app.post("/api/recruiter/request-verification", async (req, res) => {
   const { email } = req.body;
 
-  const user = users.find(u => u.email === email && u.role === "recruiter");
+  const user = await User.findOne({ email, role: "recruiter" });
 
   if (!user) {
     return res.status(404).json({ error: "Recruiter not found" });
   }
 
   user.verificationStatus = "pending";
+  await user.save();
 
   res.json({ message: "Verification request sent" });
 });
@@ -173,7 +196,9 @@ app.post("/api/recruiter/request-verification", (req, res) => {
 app.post("/api/admin/verify-recruiter", (req, res) => {
   const { email } = req.body;
 
-  const user = users.find(u => u.email === email && u.role === "recruiter");
+  const user = users.find(
+    (u) => u.email === email && u.role === "recruiter"
+  );
 
   if (!user) {
     return res.status(404).json({ error: "Recruiter not found" });
@@ -183,20 +208,7 @@ app.post("/api/admin/verify-recruiter", (req, res) => {
 
   res.json({ message: "Recruiter verified ✅" });
 });
-
-app.post("/api/admin/verify-recruiter", (req, res) => {
-  const { email } = req.body;
-
-  const user = users.find(u => u.email === email && u.role === "recruiter");
-
-  if (!user) {
-    return res.status(404).json({ error: "Recruiter not found" });
-  }
-
-  user.verificationStatus = "verified";
-
-  res.json({ message: "Recruiter verified ✅" });
-});
+  
 /* -------------------------------------------------- */
 /* JOB ROUTES */
 /* -------------------------------------------------- */
