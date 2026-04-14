@@ -229,32 +229,49 @@ app.post("/api/admin/verify-recruiter", async (req, res) => {
 /* JOB ROUTES */
 /* -------------------------------------------------- */
 app.post("/api/recruiter/jobs", async (req, res) => {
-  const { recruiterEmail } = req.body;
+   try {
+    const { recruiterEmail } = req.body;
+ if (!recruiterEmail) {
+      return res.status(400).json({ error: "recruiterEmail is required" });
+    }
 
-  const user = users.find(u => u.email === recruiterEmail);
+ const user = await User.findOne({ email: recruiterEmail, role: "recruiter" });
 
-  if (!user || user.verificationStatus !== "verified") {
-    return res.status(403).json({
-      error: "Only verified recruiters can post jobs"
-    });
+   if (!user || user.verificationStatus !== "verified") {
+      return res.status(403).json({
+        error: "Only verified recruiters can post jobs"
+      });
+    }
+
+    const job = await Job.create(req.body);
+    res.json(job);
+  } catch (err) {
+    console.error("Create recruiter job error:", err);
+    res.status(500).json({ error: "Failed to create job" });
   }
-
-  const job = await Job.create(req.body);
-  res.json(job);
 });
 
-app.get("/api/recruiter/profile", (req, res) => {
-  const { email } = req.query;
+app.get("/api/recruiter/profile", async (req, res) => {
+  try {
+    const { email } = req.query;
 
-  const user = users.find(u => u.email === email);
+   if (!email) {
+      return res.status(400).json({ error: "email is required" });
+    }
 
-  if (!user) return res.status(404).json({ error: "User not found" });
+  const user = await User.findOne({ email, role: "recruiter" }).lean();
 
-  res.json({
-    fullName: user.fullName,
-    email: user.email,
-    verificationStatus: user.verificationStatus
-  });
+ if (!user) return res.status(404).json({ error: "User not found" });
+
+    res.json({
+      fullName: user.fullName,
+      email: user.email,
+      verificationStatus: user.verificationStatus
+    });
+  } catch (err) {
+    console.error("Recruiter profile fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch recruiter profile" });
+  }
 });
 
 app.get("/api/jobs", async (_, res) => {
